@@ -127,7 +127,7 @@ def get_deal_detail(deal_id: str, db: Session = Depends(get_db)):
 @router.get("/disputes")
 def get_disputes_queue(db: Session = Depends(get_db)):
     """Get the queue of active disputes, focusing on Tier 3 escalations."""
-    disputes = db.query(Dispute).filter(Dispute.resolved_at == None).order_by(Dispute.created_at.desc()).all()
+    disputes = db.query(Dispute).order_by(Dispute.created_at.desc()).all()
     result = []
     for d in disputes:
         deal = db.query(Deal).filter(Deal.id == d.deal_id).first()
@@ -148,6 +148,7 @@ def get_disputes_queue(db: Session = Depends(get_db)):
             "ai_decision": d.ai_decision,
             "ai_reasoning": d.ai_reasoning,
             "ai_confidence": d.ai_confidence,
+            "resolved_at": d.resolved_at,
             "created_at": d.created_at
         })
     return result

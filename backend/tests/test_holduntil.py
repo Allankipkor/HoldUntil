@@ -145,14 +145,14 @@ def test_price_edit_and_cancel_commands(db_session):
     # 1. Create a draft deal
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "SELL")
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "iPhone 17 Pro")
-    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "230")
+    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "14,000")
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "3")
     
     deal = db_session.query(Deal).filter(Deal.item_description == "iPhone 17 Pro").first()
-    assert deal.agreed_price == 230.0
+    assert deal.agreed_price == 14000.0
     
-    # 2. Seller corrects the price to 230000
-    r_price = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "PRICE 230000")
+    # 2. Seller corrects the price to 230,000 (with comma)
+    r_price = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "PRICE 230,000")
     db_session.refresh(deal)
     assert deal.agreed_price == 230000.0
     assert "230000" in r_price

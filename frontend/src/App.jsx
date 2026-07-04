@@ -41,6 +41,7 @@ export default function App() {
     descMatch: false,
     transcriptVerified: false
   });
+  const [showBuyerConfirmDeclaration, setShowBuyerConfirmDeclaration] = useState(false);
 
   // Admin State
   const [users, setUsers] = useState([]);
@@ -300,6 +301,17 @@ export default function App() {
         if (data.deal_id) {
           setActiveDealId(data.deal_id);
           fetchDealDetails(data.deal_id);
+        } else {
+          // If the deal was cancelled/reset, clear the active deal and chat logs!
+          const cleanMsg = msgText.trim().toUpperCase();
+          if (cleanMsg === "CANCEL" || cleanMsg === "RESET") {
+            setTimeout(() => {
+              setChatLogs([]);
+              setActiveDealId(null);
+              setDealDetails(null);
+              setShowBuyerConfirmDeclaration(false);
+            }, 1500); // give them a 1.5s window to see the bot's cancel confirmation before clearing!
+          }
         }
       }
     } catch (e) {
@@ -880,13 +892,40 @@ export default function App() {
                   </>
                 )}
 
-                {dealDetails?.deal?.status === 'shipped' && (
+                {dealDetails?.deal?.status === 'shipped' && !showBuyerConfirmDeclaration && (
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
-                    <button onClick={() => sendSandboxMessage(buyerPhone, 'YES', 'Buyer')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--primary)' }}>
+                    <button onClick={() => setShowBuyerConfirmDeclaration(true)} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--primary)' }}>
                       Confirm Receive (YES)
                     </button>
                     <button onClick={() => sendSandboxMessage(buyerPhone, 'NO', 'Buyer')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-red)' }}>
                       Dispute Deal (NO)
+                    </button>
+                  </div>
+                )}
+
+                {dealDetails?.deal?.status === 'shipped' && showBuyerConfirmDeclaration && (
+                  <div style={{ padding: '8px', background: 'rgba(16,185,129,0.03)', border: '1px solid var(--border-muted)', borderRadius: '6px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 'bold', textAlign: 'center' }}>⚠️ DECLARATION REQUIRED</span>
+                    <button 
+                      onClick={() => { sendSandboxMessage(buyerPhone, 'YES', 'Buyer'); setShowBuyerConfirmDeclaration(false); }} 
+                      className="btn btn-primary" 
+                      style={{ padding: '6px', fontSize: '0.7rem', background: 'var(--primary)', color: 'white', border: 'none', cursor: 'pointer' }}
+                    >
+                      1. I have confirmed and received
+                    </button>
+                    <button 
+                      onClick={() => { sendSandboxMessage(buyerPhone, 'NO', 'Buyer'); setShowBuyerConfirmDeclaration(false); }} 
+                      className="btn btn-secondary" 
+                      style={{ padding: '6px', fontSize: '0.7rem', borderColor: 'var(--accent-red)', color: 'var(--accent-red)', cursor: 'pointer' }}
+                    >
+                      2. I confirm I haven't received the item
+                    </button>
+                    <button 
+                      onClick={() => setShowBuyerConfirmDeclaration(false)} 
+                      className="btn btn-secondary" 
+                      style={{ padding: '4px', fontSize: '0.65rem', cursor: 'pointer' }}
+                    >
+                      Cancel
                     </button>
                   </div>
                 )}
@@ -922,7 +961,9 @@ export default function App() {
                     >
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
                         <span style={{ fontWeight: '600', fontSize: '0.85rem' }}>{disp.item_description}</span>
-                        <span className="status-badge status-disputed" style={{ fontSize: '9px' }}>Disputed</span>
+                        <span className={`status-badge ${disp.resolved_at ? 'status-completed' : 'status-disputed'}`} style={{ fontSize: '9px' }}>
+                          {disp.resolved_at ? 'Resolved' : 'Active'}
+                        </span>
                       </div>
                       <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
                         Filer: {disp.filed_by_handle} | Price: KES {disp.agreed_price}

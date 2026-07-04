@@ -89,7 +89,7 @@ class ChatBotService:
                 deal = db.query(Deal).filter(Deal.id == active_deal_id).first()
                 if deal and deal.status in [DealStatus.DRAFT, DealStatus.AWAITING_CONFIRMATION, DealStatus.AWAITING_CONFIRMATION]:
                     if deal.seller_id == user.id:
-                        price_match = re.search(r"\d+", text)
+                        price_match = re.search(r"\d+", text.replace(",", ""))
                         if price_match:
                             new_price = float(price_match.group())
                             deal.agreed_price = new_price
@@ -119,7 +119,7 @@ class ChatBotService:
 
         elif state == "AWAITING_PRICE":
             # Extract numbers
-            price_match = re.search(r"\d+", text)
+            price_match = re.search(r"\d+", text.replace(",", ""))
             if not price_match:
                 return "Please enter a valid price in numbers (e.g. 15000)."
             price = float(price_match.group())
@@ -281,6 +281,18 @@ class ChatBotService:
                         # Initiate dispute
                         deal.status = DealStatus.DISPUTED
                         db.commit()
+                        
+                        # Create Dispute record immediately so it shows up in the queue!
+                        from backend.app.models import Dispute, DisputeTier
+                        dispute = Dispute(
+                            deal_id=deal.id,
+                            filed_by=user.id,
+                            reason="Awaiting filer's detailed statement...",
+                            tier=DisputeTier.TIER_2_AI
+                        )
+                        db.add(dispute)
+                        db.commit()
+                        
                         session["state"] = "AWAITING_DISPUTE_REASON"
                         
                         # Notify seller
@@ -289,20 +301,25 @@ class ChatBotService:
                             f"⚠️ The buyer has disputed the delivery. HoldUntil escrow funds are locked. We will collect statements from both parties for moderation.",
                             deal.id
                         )
-                        return "Escrow dispute registered. Please type your reason for the dispute. What was wrong with the item or delivery?"
+                        return "Escrow dispute registered. Please submit your reason before the automated moderator makes a judgment. What was wrong with the item or delivery?"
 
                 elif session["state"] == "AWAITING_DISPUTE_REASON":
-                    # Register the dispute record
-                    from backend.app.models import Dispute, DisputeTier
-                    
-                    dispute = Dispute(
-                        deal_id=deal.id,
-                        filed_by=user.id,
-                        reason=text,
-                        tier=DisputeTier.TIER_2_AI
-                    )
-                    db.add(dispute)
-                    db.commit()
+                    # Update the dispute record with the detailed reason
+                    from backend.app.models import Dispute
+                    dispute = db.query(Dispute).filter(Dispute.deal_id == deal.id, Dispute.resolved_at == None).first()
+                    if dispute:
+                        dispute.reason = text
+                        db.commit()
+                    else:
+                        from backend.app.models import DisputeTier
+                        dispute = Dispute(
+                            deal_id=deal.id,
+                            filed_by=user.id,
+                            reason=text,
+                            tier=DisputeTier.TIER_2_AI
+                        )
+                        db.add(dispute)
+                        db.commit()
                     
                     session["state"] = "IDLE"
                     
@@ -313,12 +330,10 @@ class ChatBotService:
                         deal.id
                     )
                     
-                    # Trigger AI resolution check in background or synchronously
-                    # Let's import and run AI resolution
+                    # Trigger AI resolution check
                     from backend.app.services.ai_service import AIService
                     try:
                         AIResult = AIService.run_moderation(db, dispute.id)
-                        # Depending on AI confidence, it might auto-apply or present to human
                     except Exception as ai_err:
                         logger.error(f"AI moderation trigger error: {ai_err}")
 
