@@ -74,6 +74,42 @@ class ChatBotService:
             deal_id = text.split("_", 1)[1].strip()
             return cls._handle_join_deal(db, user, deal_id, session)
 
+        if normalized_text in ["CANCEL", "RESET"]:
+            session["state"] = "IDLE"
+            if active_deal_id:
+                deal = db.query(Deal).filter(Deal.id == active_deal_id).first()
+                if deal and deal.status in [DealStatus.DRAFT, DealStatus.AWAITING_CONFIRMATION]:
+                    deal.status = DealStatus.CANCELLED
+                    db.commit()
+            session["deal_id"] = None
+            return "Dialogue reset. Active draft deal cancelled. Type 'SELL' to start a new transaction."
+
+        if normalized_text.startswith("PRICE"):
+            if active_deal_id:
+                deal = db.query(Deal).filter(Deal.id == active_deal_id).first()
+                if deal and deal.status in [DealStatus.DRAFT, DealStatus.AWAITING_CONFIRMATION, DealStatus.AWAITING_CONFIRMATION]:
+                    if deal.seller_id == user.id:
+                        price_match = re.search(r"\d+", text)
+                        if price_match:
+                            new_price = float(price_match.group())
+                            deal.agreed_price = new_price
+                            deal.seller_confirmed = True
+                            deal.buyer_confirmed = False  # buyer must re-confirm
+                            db.commit()
+                            
+                            # Notify buyer if linked
+                            if deal.buyer_id:
+                                MetaService.send_text_message(
+                                    db, platform, deal.buyer.phone_or_handle,
+                                    f"⚠️ The seller has updated the deal price to KES {new_price:.2f}.\n\n"
+                                    f"Please review the updated details and reply 'CONFIRM' to accept.",
+                                    deal.id
+                                )
+                            return f"Price updated to KES {new_price:.2f}. Awaiting buyer confirmation."
+                    else:
+                        return "Only the seller can modify the price of this deal."
+            return "No active draft deal found to update the price. Type 'SELL' to start a new deal."
+
         # State-based handling
         state = session["state"]
         if state == "AWAITING_DESC":

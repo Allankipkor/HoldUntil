@@ -93,7 +93,7 @@ def test_buyer_join_and_confirm(db_session):
 
     # Buyer confirms terms
     confirm_reply = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, buyer_phone, "CONFIRM")
-    assert "mpesa" in confirm_reply.lower()
+    assert "m-pesa" in confirm_reply.lower() or "stk" in confirm_reply.lower()
 
 def test_courier_tracking_plugin():
     """Verify courier APIs pluggable tracking number routing."""
@@ -137,3 +137,29 @@ def test_ai_heuristics_dispute_resolution(db_session):
     res_a = AIService._run_heuristics(deal, None, [])
     assert res_a["outcome"] == "refund"
     assert res_a["confidence"] == 0.99
+
+def test_price_edit_and_cancel_commands(db_session):
+    """Test updating the deal price and cancelling the session dialogue via command inputs."""
+    seller_phone = "254711111111"
+    
+    # 1. Create a draft deal
+    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "SELL")
+    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "iPhone 17 Pro")
+    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "230")
+    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "3")
+    
+    deal = db_session.query(Deal).filter(Deal.item_description == "iPhone 17 Pro").first()
+    assert deal.agreed_price == 230.0
+    
+    # 2. Seller corrects the price to 230000
+    r_price = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "PRICE 230000")
+    db_session.refresh(deal)
+    assert deal.agreed_price == 230000.0
+    assert "230000" in r_price
+    
+    # 3. Seller resets/cancels the deal
+    r_cancel = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "CANCEL")
+    db_session.refresh(deal)
+    assert deal.status == DealStatus.CANCELLED
+    assert "cancelled" in r_cancel.lower()
+    assert USER_SESSIONS[seller_phone]["state"] == "IDLE"

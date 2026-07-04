@@ -1,0 +1,29 @@
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+.test_venv/
+venv/
+backend/venv/
+
+# Node Modules
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+
+# SQLite Database
+*.db
+*.db-shm
+*.db-wal
+
+# IDE Settings
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
