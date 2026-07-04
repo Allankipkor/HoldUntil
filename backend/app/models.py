@@ -128,6 +128,7 @@ class Dispute(Base):
     # Final Outcome (determined by AI or Human moderator)
     final_outcome = Column(SQLEnum(OutcomeType), nullable=True)
     resolved_at = Column(DateTime, nullable=True)
+    filer_satisfied = Column(Boolean, nullable=True, default=None)
     created_at = Column(DateTime, default=utcnow)
 
     # Relationships

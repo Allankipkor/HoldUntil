@@ -84,6 +84,31 @@ class ChatBotService:
             session["deal_id"] = None
             return "Dialogue reset. Active draft deal cancelled. Type 'SELL' to start a new transaction."
 
+        if normalized_text in ["SATISFIED", "ACCEPT"]:
+            latest_deal = db.query(Deal).filter(
+                (Deal.seller_id == user.id) | (Deal.buyer_id == user.id)
+            ).order_by(Deal.created_at.desc()).first()
+            if not latest_deal:
+                return "No recent transaction found."
+            
+            from backend.app.models import Dispute, DisputeTier
+            dispute = db.query(Dispute).filter(Dispute.deal_id == latest_deal.id).first()
+            if not dispute:
+                return "No dispute record found for this transaction."
+            
+            if dispute.filed_by != user.id:
+                return "Only the user who raised the dispute can confirm satisfaction."
+                
+            if dispute.tier == DisputeTier.TIER_3_HUMAN and dispute.resolved_at is None:
+                return "This dispute is already escalated for Human Moderator review and cannot be marked as satisfied."
+
+            dispute.filer_satisfied = True
+            db.commit()
+            
+            session["state"] = "IDLE"
+            session["deal_id"] = None
+            return "Thank you! We're glad the automated resolution was satisfactory. The dispute is now officially closed."
+
         if normalized_text == "ESCALATE":
             latest_deal = db.query(Deal).filter(
                 (Deal.seller_id == user.id) | (Deal.buyer_id == user.id)
@@ -96,6 +121,12 @@ class ChatBotService:
             dispute = db.query(Dispute).filter(Dispute.deal_id == latest_deal.id).first()
             if not dispute:
                 return "No dispute record found for this transaction."
+            
+            if dispute.filed_by != user.id:
+                return "Only the user who raised the dispute can escalate it to a Human Moderator."
+            
+            if getattr(dispute, "filer_satisfied", False):
+                return "This dispute has already been accepted and closed. It cannot be escalated."
             
             if dispute.tier == DisputeTier.TIER_3_HUMAN and dispute.resolved_at is None:
                 return "This dispute is already escalated and pending Human Moderator review."
@@ -336,7 +367,11 @@ class ChatBotService:
                             f"⚠️ The buyer has disputed the delivery. HoldUntil escrow funds are locked. We will collect statements from both parties for moderation.",
                             deal.id
                         )
-                        return "Escrow dispute registered. Please submit your reason before the automated moderator makes a judgment. What was wrong with the item or delivery?"
+                        return (
+                            "⚠️ WARNING: Filing false/meritless disputes is a violation of HoldUntil terms. "
+                            "If physical delivery proof (courier tracking or photo evidence with matching verification code) is verified, the dispute will be resolved in the seller's favor, and your Trust Score will be penalized.\n\n"
+                            "Escrow dispute registered. Please submit your reason before the automated moderator makes a judgment. What was wrong with the item or delivery?"
+                        )
 
                 elif session["state"] == "AWAITING_DISPUTE_REASON":
                     # Update the dispute record with the detailed reason

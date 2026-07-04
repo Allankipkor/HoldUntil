@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from backend.app.models import Deal, DealStatus, Evidence, Dispute, DisputeTier, OutcomeType
 from backend.app.services.daraja_service import DarajaService
 from backend.app.services.meta_service import MetaService
+from backend.app.services.ai_service import AIService
 import logging
 
 logger = logging.getLogger("scheduler")
@@ -63,6 +64,7 @@ def run_tier_1_checks(db: Session):
                 logger.error(f"Failed B2C payout for deal {deal.id} auto-refund: {pay_err}")
                 
             deal.status = DealStatus.REFUNDED
+            AIService.apply_dispute_outcome(db, deal, dispute, OutcomeType.REFUND)
             db.commit()
 
     # Rule 2: Seller provided evidence + buyer silent past grace period
@@ -112,6 +114,7 @@ def run_tier_1_checks(db: Session):
                 logger.error(f"Failed B2C payout for deal {deal.id} auto-release: {pay_err}")
                 
             deal.status = DealStatus.COMPLETED
+            AIService.apply_dispute_outcome(db, deal, dispute, OutcomeType.RELEASE)
             db.commit()
 
 def start_scheduler(SessionLocalFactory):

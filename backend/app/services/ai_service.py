@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime, UTC
 from sqlalchemy.orm import Session
 from backend.app.config import settings
@@ -6,6 +7,7 @@ from backend.app.models import Dispute, Deal, User, ChatLog, Evidence, OutcomeTy
 from backend.app.services.couriers import verify_tracking
 from backend.app.services.image_service import ImageService
 from backend.app.services.meta_service import MetaService
+from backend.app.services.daraja_service import DarajaService
 import logging
 
 logger = logging.getLogger("ai_service")
@@ -162,6 +164,10 @@ DECISION INSTRUCTIONS:
         # Let's auto-apply for AI moderator to keep it smooth, but write it down.
         # Wait, the prompt says "Tier 2 - AI Moderator (default for actual disputes): Required output: exactly one of Release / Refund / Partial split... human dashboard is Tier 3 (opt-in escalation only)".
         # Yes! So Tier 2 decisions auto-execute unless escalated! Let's execute the payout.
+        # Determine filer and non-filer for satisfaction checks
+        filer_user = seller if dispute.filed_by == seller.id else buyer
+        non_filer_user = buyer if dispute.filed_by == seller.id else seller
+
         if result["outcome"] == "release":
             dispute.final_outcome = OutcomeType.RELEASE
             dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
@@ -171,18 +177,20 @@ DECISION INSTRUCTIONS:
             except Exception as pay_err:
                 logger.error(f"Auto-payout error: {pay_err}")
             
+            cls.apply_dispute_outcome(db, deal, dispute, OutcomeType.RELEASE)
+            
             # Send notifications with option to escalate
             MetaService.send_text_message(
-                db, PlatformType.WHATSAPP, seller.phone_or_handle,
-                f"🤖 Automated Moderator Verdict: Payout of KES {deal.agreed_price:.2f} has been released to your account.\n\n"
-                f"Rationale: {result['reasoning']}",
+                db, PlatformType.WHATSAPP, filer_user.phone_or_handle,
+                f"🤖 Automated Moderator Verdict: Payout of KES {deal.agreed_price:.2f} has been released to the seller.\n\n"
+                f"Rationale: {result['reasoning']}\n\n"
+                f"Are you satisfied with this decision? Reply 'SATISFIED' to accept, or 'ESCALATE' to request a Human Moderator review.",
                 deal.id
             )
             MetaService.send_text_message(
-                db, PlatformType.WHATSAPP, buyer.phone_or_handle,
-                f"🤖 Automated Moderator Verdict: Payout has been released to the seller.\n\n"
-                f"Rationale: {result['reasoning']}\n\n"
-                f"If you are not satisfied, reply 'ESCALATE' to request a Human Moderator review.",
+                db, PlatformType.WHATSAPP, non_filer_user.phone_or_handle,
+                f"🤖 Automated Moderator Verdict: Payout of KES {deal.agreed_price:.2f} has been released to the seller.\n\n"
+                f"Rationale: {result['reasoning']}",
                 deal.id
             )
         elif result["outcome"] == "refund":
@@ -194,17 +202,19 @@ DECISION INSTRUCTIONS:
             except Exception as refund_err:
                 logger.error(f"Auto-refund error: {refund_err}")
             
+            cls.apply_dispute_outcome(db, deal, dispute, OutcomeType.REFUND)
+            
             # Send notifications with option to escalate
             MetaService.send_text_message(
-                db, PlatformType.WHATSAPP, seller.phone_or_handle,
-                f"🤖 Automated Moderator Verdict: Funds have been refunded to the buyer.\n\n"
+                db, PlatformType.WHATSAPP, filer_user.phone_or_handle,
+                f"🤖 Automated Moderator Verdict: Funds of KES {deal.agreed_price:.2f} have been refunded to the buyer.\n\n"
                 f"Rationale: {result['reasoning']}\n\n"
-                f"If you are not satisfied, reply 'ESCALATE' to request a Human Moderator review.",
+                f"Are you satisfied with this decision? Reply 'SATISFIED' to accept, or 'ESCALATE' to request a Human Moderator review.",
                 deal.id
             )
             MetaService.send_text_message(
-                db, PlatformType.WHATSAPP, buyer.phone_or_handle,
-                f"🤖 Automated Moderator Verdict: KES {deal.agreed_price:.2f} has been refunded to your account.\n\n"
+                db, PlatformType.WHATSAPP, non_filer_user.phone_or_handle,
+                f"🤖 Automated Moderator Verdict: Funds of KES {deal.agreed_price:.2f} have been refunded to the buyer.\n\n"
                 f"Rationale: {result['reasoning']}",
                 deal.id
             )
@@ -221,19 +231,20 @@ DECISION INSTRUCTIONS:
             except Exception as split_err:
                 logger.error(f"Auto-split payout error: {split_err}")
             
+            cls.apply_dispute_outcome(db, deal, dispute, OutcomeType.PARTIAL_SPLIT, partial_split_percentage=pct)
+            
             # Send notifications with option to escalate
             MetaService.send_text_message(
-                db, PlatformType.WHATSAPP, seller.phone_or_handle,
-                f"🤖 Automated Moderator Verdict: Split decision. KES {seller_amt:.2f} paid to your account.\n\n"
+                db, PlatformType.WHATSAPP, filer_user.phone_or_handle,
+                f"🤖 Automated Moderator Verdict: Split decision. KES {seller_amt:.2f} paid to the seller and KES {buyer_amt:.2f} refunded to the buyer.\n\n"
                 f"Rationale: {result['reasoning']}\n\n"
-                f"If you are not satisfied, reply 'ESCALATE' to request a Human Moderator review.",
+                f"Are you satisfied with this decision? Reply 'SATISFIED' to accept, or 'ESCALATE' to request a Human Moderator review.",
                 deal.id
             )
             MetaService.send_text_message(
-                db, PlatformType.WHATSAPP, buyer.phone_or_handle,
-                f"🤖 Automated Moderator Verdict: Split decision. KES {buyer_amt:.2f} paid to your account.\n\n"
-                f"Rationale: {result['reasoning']}\n\n"
-                f"If you are not satisfied, reply 'ESCALATE' to request a Human Moderator review.",
+                db, PlatformType.WHATSAPP, non_filer_user.phone_or_handle,
+                f"🤖 Automated Moderator Verdict: Split decision. KES {seller_amt:.2f} paid to the seller and KES {buyer_amt:.2f} refunded to the buyer.\n\n"
+                f"Rationale: {result['reasoning']}",
                 deal.id
             )
 
@@ -300,4 +311,66 @@ DECISION INSTRUCTIONS:
             "reasoning": "Unable to verify physical delivery or claim accuracy from transcripts alone. Resolving via 50/50 split.",
             "confidence": 0.50
         }
-import re
+
+    @classmethod
+    def apply_dispute_outcome(cls, db: Session, deal: Deal, dispute: Dispute, outcome: OutcomeType, partial_split_percentage: int = None):
+        """
+        Adjusts trust scores and recalculates win rates for buyer and seller.
+        """
+        seller = db.query(User).filter(User.id == deal.seller_id).first()
+        buyer = db.query(User).filter(User.id == deal.buyer_id).first() if deal.buyer_id else None
+
+        if outcome == OutcomeType.RELEASE:
+            # Reward seller, penalize buyer (if buyer was the dispute filer)
+            if seller:
+                seller.trust_score = min(100.0, seller.trust_score + 2.0)
+            if buyer and dispute.filed_by == buyer.id:
+                buyer.trust_score = max(0.0, buyer.trust_score - 15.0)
+
+        elif outcome == OutcomeType.REFUND:
+            # Reward buyer, penalize seller (if seller committed fraud or failed delivery)
+            if buyer:
+                buyer.trust_score = min(100.0, buyer.trust_score + 2.0)
+            if seller:
+                seller.trust_score = max(0.0, seller.trust_score - 20.0)
+
+        db.commit()
+
+        # Recalculate win rates for both parties
+        if seller:
+            cls.recalculate_user_metrics(db, seller)
+        if buyer:
+            cls.recalculate_user_metrics(db, buyer)
+        db.commit()
+
+    @classmethod
+    def recalculate_user_metrics(cls, db: Session, user: User):
+        """
+        Recalculate dispute win rate based on resolved disputes historically.
+        - A seller wins if final_outcome is RELEASE.
+        - A buyer wins if final_outcome is REFUND.
+        - PARTIAL_SPLIT counts as a 0.5 win for both.
+        """
+        resolved_disputes = db.query(Dispute).join(Deal).filter(
+            Dispute.resolved_at != None,
+            (Deal.seller_id == user.id) | (Deal.buyer_id == user.id)
+        ).all()
+
+        total = len(resolved_disputes)
+        if total == 0:
+            user.dispute_win_rate = 0.0
+            return
+
+        wins = 0.0
+        for d in resolved_disputes:
+            is_seller = (d.deal.seller_id == user.id)
+            if d.final_outcome == OutcomeType.RELEASE:
+                if is_seller:
+                    wins += 1.0
+            elif d.final_outcome == OutcomeType.REFUND:
+                if not is_seller:
+                    wins += 1.0
+            elif d.final_outcome == OutcomeType.PARTIAL_SPLIT:
+                wins += 0.5
+
+        user.dispute_win_rate = float(wins) / total

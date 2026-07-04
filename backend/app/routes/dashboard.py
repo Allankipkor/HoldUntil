@@ -211,6 +211,15 @@ def resolve_dispute_manually(
         MetaService.send_text_message(db, PlatformType.WHATSAPP, seller.phone_or_handle, f"⚖️ Dispute resolved via Partial Split ({pct}% to seller). Received KES {seller_amt:.2f}. Rationale: {reasoning}", deal.id)
         MetaService.send_text_message(db, PlatformType.WHATSAPP, buyer.phone_or_handle, f"⚖️ Dispute resolved via Partial Split ({100-pct}% to buyer). Received KES {buyer_amt:.2f}. Rationale: {reasoning}", deal.id)
 
+    # Adjust trust scores and win rates
+    AIService.apply_dispute_outcome(
+        db=db,
+        deal=deal,
+        dispute=dispute,
+        outcome=OutcomeType(outcome),
+        partial_split_percentage=partial_split_percentage
+    )
+
     db.commit()
     return {"status": "resolved", "final_outcome": outcome}
 
