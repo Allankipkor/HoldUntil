@@ -513,3 +513,21 @@ def simulate_message_revocation(chat_log_id: str = Form(...), db: Session = Depe
     
     logger.info(f"Simulated revocation for chat log {chat_log_id}")
     return {"status": "message_revoked", "chat_log_id": chat_log_id, "revoked_at": chat_log.revoked_at}
+
+@router.post("/simulation/reset-all")
+def reset_sandbox_database(db: Session = Depends(get_db)):
+    """Reset the sandbox database by deleting all transactions, disputes, and sessions."""
+    # Wipe database tables
+    db.query(Payment).delete()
+    db.query(Dispute).delete()
+    db.query(Evidence).delete()
+    db.query(ChatLog).delete()
+    db.query(Deal).delete()
+    db.query(User).filter(User.id != SYSTEM_BOT_ID).delete()
+    db.commit()
+    
+    # Wipe in-memory user sessions
+    from backend.app.services.chat_bot import USER_SESSIONS
+    USER_SESSIONS.clear()
+    
+    return {"status": "success", "message": "Database and active sessions reset successfully."}

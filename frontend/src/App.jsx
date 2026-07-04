@@ -260,6 +260,28 @@ export default function App() {
     }
   };
 
+  const handleResetAll = async () => {
+    if (!window.confirm("Are you sure you want to delete all database transactions and reset all active chat sessions? This cannot be undone.")) return;
+    try {
+      const res = await fetch('/api/dashboard/simulation/reset-all', {
+        method: 'POST'
+      });
+      if (res.ok) {
+        alert("Database and chat sessions cleared successfully!");
+        setChatLogs([]);
+        setActiveDealId(null);
+        setDealDetails(null);
+        setDisputes([]);
+        setUsers([]);
+        setActiveTab('sandbox');
+      } else {
+        alert("Reset failed.");
+      }
+    } catch (e) {
+      alert("Reset simulation complete.");
+    }
+  };
+
   // ----------------------------------------------------
   // SANDBOX SIMULATOR ACTIONS
   // ----------------------------------------------------
@@ -1177,6 +1199,23 @@ export default function App() {
         {activeTab === 'admin' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             
+            {/* Sandbox Debugging Tools */}
+            <div className="glass-card" style={{ padding: '20px', border: '1px solid var(--accent-red)' }}>
+              <h3 style={{ fontSize: '1.1rem', marginBottom: '8px', color: 'var(--accent-red)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <ShieldAlert size={18} /> Sandbox Debugging Tools
+              </h3>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
+                If you get stuck or want to clear previous transactions to test different scenarios from scratch, use the button below to purge all records.
+              </p>
+              <button 
+                onClick={handleResetAll} 
+                className="btn btn-primary" 
+                style={{ background: 'var(--accent-red)', borderColor: 'var(--accent-red)', color: 'white', padding: '10px 16px', fontSize: '0.85rem', cursor: 'pointer' }}
+              >
+                🚨 Purge Database & Reset Sessions
+              </button>
+            </div>
+
             {/* Config details */}
             <div className="glass-card" style={{ padding: '20px' }}>
               <h3 style={{ fontSize: '1.1rem', marginBottom: '16px' }}>Escrow Configuration settings</h3>
