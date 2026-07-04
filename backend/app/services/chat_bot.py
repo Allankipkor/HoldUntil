@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 import uuid
 import re
 from sqlalchemy.orm import Session
@@ -56,7 +56,7 @@ class ChatBotService:
                 sender_id=user.id,
                 message_content=text,
                 media_url=media_url,
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now(UTC).replace(tzinfo=None)
             )
             db.add(chat_log)
             db.commit()
@@ -138,7 +138,7 @@ class ChatBotService:
                 seller_id=user.id,
                 item_description=session["draft_desc"],
                 agreed_price=session["draft_price"],
-                delivery_deadline=datetime.utcnow() + timedelta(days=days),
+                delivery_deadline=datetime.now(UTC).replace(tzinfo=None) + timedelta(days=days),
                 status=DealStatus.DRAFT,
                 seller_confirmed=True  # Seller created it, so they auto-confirm
             )

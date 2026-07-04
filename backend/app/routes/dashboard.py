@@ -1,7 +1,7 @@
 import os
 import io
 import uuid
-from datetime import datetime
+from datetime import datetime, UTC
 from fastapi import APIRouter, Depends, HTTPException, Response, Query, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from backend.app.database import get_db
@@ -183,7 +183,7 @@ def resolve_dispute_manually(
         logger.info(f"AI Decision ({dispute.ai_decision}) was overturned by human to ({outcome}) for deal {deal.id}")
 
     dispute.final_outcome = OutcomeType(outcome)
-    dispute.resolved_at = datetime.utcnow()
+    dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
     dispute.tier = DisputeTier.TIER_3_HUMAN
 
     # Trigger payouts
@@ -446,7 +446,7 @@ def upload_simulated_evidence(
     exif = {
         "Make": "Apple",
         "Model": "iPhone 13 Pro",
-        "DateTime": datetime.utcnow().strftime("%Y:%m-%d %H:%M:%S"),
+        "DateTime": datetime.now(UTC).strftime("%Y:%m-%d %H:%M:%S"),
         "Software": "iOS 16.2",
         "GPSInfo": {"Latitude": -1.2921, "Longitude": 36.8219} # Nairobi GPS
     }
@@ -485,7 +485,7 @@ def upload_simulated_evidence(
         sender_id=user.id,
         message_content=f"[Media Attachment Uploaded: {photo_name}]",
         media_url=f"/simulated/media/{photo_name}",
-        timestamp=datetime.utcnow()
+        timestamp=datetime.now(UTC).replace(tzinfo=None)
     )
     db.add(chat_log)
     db.commit()
@@ -508,7 +508,7 @@ def simulate_message_revocation(chat_log_id: str = Form(...), db: Session = Depe
         raise HTTPException(status_code=404, detail="Chat log not found")
 
     chat_log.is_revoked = True
-    chat_log.revoked_at = datetime.utcnow()
+    chat_log.revoked_at = datetime.now(UTC).replace(tzinfo=None)
     db.commit()
     
     logger.info(f"Simulated revocation for chat log {chat_log_id}")

@@ -1,6 +1,9 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, UTC
 from enum import Enum
+
+def utcnow():
+    return datetime.now(UTC).replace(tzinfo=None)
 from sqlalchemy import Column, String, Float, Integer, Boolean, DateTime, ForeignKey, Text, JSON, Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from backend.app.database import Base
@@ -55,7 +58,7 @@ class User(Base):
     dispute_win_rate = Column(Float, default=0.0)
     ai_overturn_flag_count = Column(Integer, default=0)
     role = Column(SQLEnum(UserRole), default=UserRole.USER, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     # Relationships
     deals_as_seller = relationship("Deal", foreign_keys="Deal.seller_id", back_populates="seller")
@@ -78,7 +81,7 @@ class Deal(Base):
     tracking_number = Column(String(100), nullable=True)
     seller_confirmed = Column(Boolean, default=False)
     buyer_confirmed = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     # Relationships
     seller = relationship("User", foreign_keys=[seller_id], back_populates="deals_as_seller")
@@ -98,7 +101,7 @@ class Payment(Base):
     b2c_payout_ref = Column(String(100), nullable=True, index=True)
     amount = Column(Float, nullable=False)
     status = Column(SQLEnum(PaymentStatus), default=PaymentStatus.PENDING, nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     # Relationships
     deal = relationship("Deal", back_populates="payments")
@@ -125,7 +128,7 @@ class Dispute(Base):
     # Final Outcome (determined by AI or Human moderator)
     final_outcome = Column(SQLEnum(OutcomeType), nullable=True)
     resolved_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     # Relationships
     deal = relationship("Deal", back_populates="disputes")
@@ -143,7 +146,7 @@ class Evidence(Base):
     exif_data = Column(JSON, nullable=True)
     dynamic_code_detected = Column(Boolean, default=False)
     courier_verified = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow)
 
     # Relationships
     deal = relationship("Deal", back_populates="evidence")
@@ -159,7 +162,7 @@ class ChatLog(Base):
     media_url = Column(String(500), nullable=True)
     is_revoked = Column(Boolean, default=False, nullable=False)
     revoked_at = Column(DateTime, nullable=True)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=utcnow)
 
     # Relationships
     deal = relationship("Deal", back_populates="chat_logs")

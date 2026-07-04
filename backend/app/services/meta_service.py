@@ -1,5 +1,5 @@
 import requests
-from datetime import datetime
+from datetime import datetime, UTC
 from sqlalchemy.orm import Session
 from backend.app.config import settings
 from backend.app.models import User, UserRole, PlatformType, ChatLog
@@ -42,7 +42,7 @@ class MetaService:
                 deal_id=deal_id,
                 sender_id=bot_id,
                 message_content=text,
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now(UTC).replace(tzinfo=None)
             )
             db.add(chat_log)
             db.commit()
@@ -103,7 +103,7 @@ class MetaService:
                 deal_id=deal_id,
                 sender_id=bot_id,
                 message_content=f"[Utility Reminder] {template_name}:{component_text}",
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now(UTC).replace(tzinfo=None)
             )
             db.add(chat_log)
             db.commit()
@@ -152,7 +152,7 @@ class MetaService:
                 sender_id=bot_id,
                 message_content=caption or "Sent media.",
                 media_url=media_url,
-                timestamp=datetime.utcnow()
+                timestamp=datetime.now(UTC).replace(tzinfo=None)
             )
             db.add(chat_log)
             db.commit()

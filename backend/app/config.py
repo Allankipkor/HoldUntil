@@ -1,5 +1,4 @@
-import os
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     # App Settings
@@ -39,8 +38,6 @@ class Settings(BaseSettings):
     ESCALATION_FEE_KES: float = 200.0  # escalation fee (refundable on overturn)
     DELIVERY_GRACE_PERIOD_HOURS: int = 48  # time buyer has to confirm delivery
 
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 settings = Settings()

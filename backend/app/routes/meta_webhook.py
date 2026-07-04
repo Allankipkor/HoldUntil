@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, UTC
 from fastapi import APIRouter, Request, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from backend.app.database import get_db
@@ -70,7 +70,7 @@ async def receive_meta_message(request: Request, db: Session = Depends(get_db)):
                     chat_log = db.query(ChatLog).filter(ChatLog.id == msg_id).first()
                     if chat_log:
                         chat_log.is_revoked = True
-                        chat_log.revoked_at = datetime.utcnow()
+                        chat_log.revoked_at = datetime.now(UTC).replace(tzinfo=None)
                         db.commit()
                     continue
 
@@ -118,7 +118,7 @@ async def receive_meta_message(request: Request, db: Session = Depends(get_db)):
                     chat_log = db.query(ChatLog).filter(ChatLog.id == msg_id).first()
                     if chat_log:
                         chat_log.is_revoked = True
-                        chat_log.revoked_at = datetime.utcnow()
+                        chat_log.revoked_at = datetime.now(UTC).replace(tzinfo=None)
                         db.commit()
 
     return {"status": "success"}

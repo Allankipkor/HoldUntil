@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, UTC
 from sqlalchemy.orm import Session
 from backend.app.config import settings
 from backend.app.models import Dispute, Deal, User, ChatLog, Evidence, OutcomeType
@@ -162,7 +163,7 @@ DECISION INSTRUCTIONS:
         # Yes! So Tier 2 decisions auto-execute unless escalated! Let's execute the payout.
         if result["outcome"] == "release":
             dispute.final_outcome = OutcomeType.RELEASE
-            dispute.resolved_at = datetime.utcnow()
+            dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
             deal.status = DealStatus.COMPLETED
             try:
                 DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, deal.agreed_price, is_refund=False)
@@ -170,7 +171,7 @@ DECISION INSTRUCTIONS:
                 logger.error(f"Auto-payout error: {pay_err}")
         elif result["outcome"] == "refund":
             dispute.final_outcome = OutcomeType.REFUND
-            dispute.resolved_at = datetime.utcnow()
+            dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
             deal.status = DealStatus.REFUNDED
             try:
                 DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, deal.agreed_price, is_refund=True)
@@ -178,7 +179,7 @@ DECISION INSTRUCTIONS:
                 logger.error(f"Auto-refund error: {refund_err}")
         elif result["outcome"] == "partial_split":
             dispute.final_outcome = OutcomeType.PARTIAL_SPLIT
-            dispute.resolved_at = datetime.utcnow()
+            dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
             deal.status = DealStatus.COMPLETED # split completed
             pct = result.get("partial_split_percentage", 50) or 50
             seller_amt = (pct / 100.0) * deal.agreed_price

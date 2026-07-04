@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy.orm import Session
 from backend.app.models import Deal, DealStatus, Evidence, Dispute, DisputeTier, OutcomeType
@@ -15,7 +15,7 @@ def run_tier_1_checks(db: Session):
     - Rule 1: No delivery evidence provided by seller past deadline -> auto-refund buyer
     - Rule 2: Seller provided delivery evidence (photo/tracking) + buyer silent past grace period -> auto-release to seller
     """
-    now = datetime.utcnow()
+    now = datetime.now(UTC).replace(tzinfo=None)
     logger.info("Running Tier 1 Auto-Resolve checks...")
 
     # Rule 1: No delivery evidence past deadline
