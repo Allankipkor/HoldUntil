@@ -302,15 +302,25 @@ export default function App() {
           setActiveDealId(data.deal_id);
           fetchDealDetails(data.deal_id);
         } else {
-          // If the deal was cancelled/reset, clear the active deal and chat logs!
           const cleanMsg = msgText.trim().toUpperCase();
-          if (cleanMsg === "CANCEL" || cleanMsg === "RESET") {
-            setTimeout(() => {
-              setChatLogs([]);
-              setActiveDealId(null);
-              setDealDetails(null);
-              setShowBuyerConfirmDeclaration(false);
-            }, 1500); // give them a 1.5s window to see the bot's cancel confirmation before clearing!
+          if (cleanMsg === "CANCEL" || cleanMsg === "RESET" || cleanMsg === "SELL") {
+            setActiveDealId(null);
+            setDealDetails(null);
+            setShowBuyerConfirmDeclaration(false);
+            if (cleanMsg === "SELL") {
+              setChatLogs([
+                newUserLog,
+                {
+                  sender_handle: "Bot",
+                  message_content: data.reply,
+                  timestamp: new Date().toISOString()
+                }
+              ]);
+            } else {
+              setTimeout(() => {
+                setChatLogs([]);
+              }, 1500);
+            }
           }
         }
       }
