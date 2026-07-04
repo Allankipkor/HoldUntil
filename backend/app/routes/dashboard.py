@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, Query, UploadFi
 from sqlalchemy.orm import Session
 from backend.app.database import get_db
 from backend.app.config import settings
-from backend.app.models import Deal, DealStatus, User, UserRole, Dispute, DisputeTier, OutcomeType, Evidence, ChatLog, Payment, PaymentStatus
+from backend.app.models import Deal, DealStatus, User, UserRole, Dispute, DisputeTier, OutcomeType, Evidence, ChatLog, Payment, PaymentStatus, PlatformType
 from backend.app.services.daraja_service import DarajaService
 from backend.app.services.meta_service import MetaService, SYSTEM_BOT_ID
 from backend.app.services.image_service import ImageService
