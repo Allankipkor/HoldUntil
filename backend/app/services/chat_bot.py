@@ -84,6 +84,41 @@ class ChatBotService:
             session["deal_id"] = None
             return "Dialogue reset. Active draft deal cancelled. Type 'SELL' to start a new transaction."
 
+        if normalized_text == "ESCALATE":
+            latest_deal = db.query(Deal).filter(
+                (Deal.seller_id == user.id) | (Deal.buyer_id == user.id)
+            ).order_by(Deal.created_at.desc()).first()
+            if not latest_deal:
+                return "No recent transaction found to escalate."
+            
+            from backend.app.models import Dispute, DisputeTier
+            from backend.app.config import settings
+            dispute = db.query(Dispute).filter(Dispute.deal_id == latest_deal.id).first()
+            if not dispute:
+                return "No dispute record found for this transaction."
+            
+            if dispute.tier == DisputeTier.TIER_3_HUMAN and dispute.resolved_at is None:
+                return "This dispute is already escalated and pending Human Moderator review."
+            
+            dispute.tier = DisputeTier.TIER_3_HUMAN
+            dispute.resolved_at = None  # Re-open for human review!
+            dispute.escalation_requested_by = user.id
+            dispute.escalation_fee_paid = True
+            latest_deal.status = DealStatus.DISPUTED
+            db.commit()
+            
+            # Notify other party
+            other_phone = latest_deal.seller.phone_or_handle if user.id == latest_deal.buyer_id else latest_deal.buyer.phone_or_handle
+            MetaService.send_text_message(
+                db, platform, other_phone,
+                f"⚠️ The dispute for deal '{latest_deal.item_description}' has been escalated to a Human Moderator. Escrow funds remain locked.",
+                latest_deal.id
+            )
+            
+            session["state"] = "IDLE"
+            session["deal_id"] = None
+            return f"Dispute escalated successfully. A Human Moderator has been assigned to audit the case. Escalation fee of KES {settings.ESCALATION_FEE_KES:.2f} has been charged."
+
         if normalized_text.startswith("PRICE"):
             if active_deal_id:
                 deal = db.query(Deal).filter(Deal.id == active_deal_id).first()

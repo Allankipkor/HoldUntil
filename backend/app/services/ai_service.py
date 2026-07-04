@@ -2,9 +2,10 @@ import json
 from datetime import datetime, UTC
 from sqlalchemy.orm import Session
 from backend.app.config import settings
-from backend.app.models import Dispute, Deal, User, ChatLog, Evidence, OutcomeType
+from backend.app.models import Dispute, Deal, User, ChatLog, Evidence, OutcomeType, DealStatus, PlatformType
 from backend.app.services.couriers import verify_tracking
 from backend.app.services.image_service import ImageService
+from backend.app.services.meta_service import MetaService
 import logging
 
 logger = logging.getLogger("ai_service")
@@ -169,6 +170,21 @@ DECISION INSTRUCTIONS:
                 DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, deal.agreed_price, is_refund=False)
             except Exception as pay_err:
                 logger.error(f"Auto-payout error: {pay_err}")
+            
+            # Send notifications with option to escalate
+            MetaService.send_text_message(
+                db, PlatformType.WHATSAPP, seller.phone_or_handle,
+                f"🤖 Automated Moderator Verdict: Payout of KES {deal.agreed_price:.2f} has been released to your account.\n\n"
+                f"Rationale: {result['reasoning']}",
+                deal.id
+            )
+            MetaService.send_text_message(
+                db, PlatformType.WHATSAPP, buyer.phone_or_handle,
+                f"🤖 Automated Moderator Verdict: Payout has been released to the seller.\n\n"
+                f"Rationale: {result['reasoning']}\n\n"
+                f"If you are not satisfied, reply 'ESCALATE' to request a Human Moderator review.",
+                deal.id
+            )
         elif result["outcome"] == "refund":
             dispute.final_outcome = OutcomeType.REFUND
             dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
@@ -177,6 +193,21 @@ DECISION INSTRUCTIONS:
                 DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, deal.agreed_price, is_refund=True)
             except Exception as refund_err:
                 logger.error(f"Auto-refund error: {refund_err}")
+            
+            # Send notifications with option to escalate
+            MetaService.send_text_message(
+                db, PlatformType.WHATSAPP, seller.phone_or_handle,
+                f"🤖 Automated Moderator Verdict: Funds have been refunded to the buyer.\n\n"
+                f"Rationale: {result['reasoning']}\n\n"
+                f"If you are not satisfied, reply 'ESCALATE' to request a Human Moderator review.",
+                deal.id
+            )
+            MetaService.send_text_message(
+                db, PlatformType.WHATSAPP, buyer.phone_or_handle,
+                f"🤖 Automated Moderator Verdict: KES {deal.agreed_price:.2f} has been refunded to your account.\n\n"
+                f"Rationale: {result['reasoning']}",
+                deal.id
+            )
         elif result["outcome"] == "partial_split":
             dispute.final_outcome = OutcomeType.PARTIAL_SPLIT
             dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
@@ -189,6 +220,22 @@ DECISION INSTRUCTIONS:
                 DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, buyer_amt, is_refund=True)
             except Exception as split_err:
                 logger.error(f"Auto-split payout error: {split_err}")
+            
+            # Send notifications with option to escalate
+            MetaService.send_text_message(
+                db, PlatformType.WHATSAPP, seller.phone_or_handle,
+                f"🤖 Automated Moderator Verdict: Split decision. KES {seller_amt:.2f} paid to your account.\n\n"
+                f"Rationale: {result['reasoning']}\n\n"
+                f"If you are not satisfied, reply 'ESCALATE' to request a Human Moderator review.",
+                deal.id
+            )
+            MetaService.send_text_message(
+                db, PlatformType.WHATSAPP, buyer.phone_or_handle,
+                f"🤖 Automated Moderator Verdict: Split decision. KES {buyer_amt:.2f} paid to your account.\n\n"
+                f"Rationale: {result['reasoning']}\n\n"
+                f"If you are not satisfied, reply 'ESCALATE' to request a Human Moderator review.",
+                deal.id
+            )
 
         db.commit()
         return result
