@@ -84,37 +84,42 @@ class ChatBotService:
             session["deal_id"] = None
             return "Dialogue reset. Active draft deal cancelled. Type 'SELL' to start a new transaction."
 
-        if normalized_text in ["SATISFIED", "ACCEPT"]:
+        # Post-funding Cancel Confirmation
+        if normalized_text == "CONFIRM_CANCEL" and session.get("state") == "CONFIRM_CANCEL_PENDING":
+            deal = db.query(Deal).filter(Deal.id == active_deal_id).first()
+            if deal and deal.status in [DealStatus.FUNDED, DealStatus.SHIPPED, DealStatus.DELIVERY_PROMPTED]:
+                fee = deal.agreed_price * 0.005
+                is_buyer_cancel = (user.id == deal.buyer_id)
+                
+                # Update status immediately
+                deal.status = DealStatus.CANCELLED
+                db.commit()
+                
+                if is_buyer_cancel:
+                    net_refund = deal.agreed_price - fee
+                    DarajaService.initiate_b2c_payout(db, deal, deal.buyer.phone_or_handle, net_refund, is_refund=True)
+                    MetaService.send_text_message(db, platform, deal.seller.phone_or_handle, f"⚠️ The buyer has cancelled the deal. The transaction is cancelled.", deal.id)
+                    session["deal_id"] = None
+                    session["state"] = "IDLE"
+                    return f"Deal cancelled. Your refund of KES {net_refund:.2f} (net of 0.5% cancellation fee) is processing."
+                else:
+                    DarajaService.initiate_b2c_payout(db, deal, deal.buyer.phone_or_handle, deal.agreed_price, is_refund=True)
+                    user.trust_score = max(0.0, user.trust_score - 10.0)
+                    db.commit()
+                    MetaService.send_text_message(db, platform, deal.buyer.phone_or_handle, f"⚠️ The seller has cancelled the deal. A full refund of KES {deal.agreed_price:.2f} is processing.", deal.id)
+                    session["deal_id"] = None
+                    session["state"] = "IDLE"
+                    return f"Deal cancelled. A full refund has been triggered for the buyer. Your Trust Score has been penalized -10.0 points."
+            session["state"] = "IDLE"
+            return "No active funded deal found to cancel."
+
+        # Appeal Command
+        if normalized_text == "APPEAL":
             latest_deal = db.query(Deal).filter(
                 (Deal.seller_id == user.id) | (Deal.buyer_id == user.id)
             ).order_by(Deal.created_at.desc()).first()
             if not latest_deal:
                 return "No recent transaction found."
-            
-            from backend.app.models import Dispute, DisputeTier
-            dispute = db.query(Dispute).filter(Dispute.deal_id == latest_deal.id).first()
-            if not dispute:
-                return "No dispute record found for this transaction."
-            
-            if dispute.filed_by != user.id:
-                return "Only the user who raised the dispute can confirm satisfaction."
-                
-            if dispute.tier == DisputeTier.TIER_3_HUMAN and dispute.resolved_at is None:
-                return "This dispute is already escalated for Human Moderator review and cannot be marked as satisfied."
-
-            dispute.filer_satisfied = True
-            db.commit()
-            
-            session["state"] = "IDLE"
-            session["deal_id"] = None
-            return "Thank you! We're glad the automated resolution was satisfactory. The dispute is now officially closed."
-
-        if normalized_text == "ESCALATE":
-            latest_deal = db.query(Deal).filter(
-                (Deal.seller_id == user.id) | (Deal.buyer_id == user.id)
-            ).order_by(Deal.created_at.desc()).first()
-            if not latest_deal:
-                return "No recent transaction found to escalate."
             
             from backend.app.models import Dispute, DisputeTier
             from backend.app.config import settings
@@ -123,32 +128,71 @@ class ChatBotService:
                 return "No dispute record found for this transaction."
             
             if dispute.filed_by != user.id:
-                return "Only the user who raised the dispute can escalate it to a Human Moderator."
+                return "Only the user who raised the dispute can request an Appeal."
+                
+            if dispute.resolved_at is None:
+                return "You can only appeal a dispute after a first-instance decision has been made."
             
-            if getattr(dispute, "filer_satisfied", False):
-                return "This dispute has already been accepted and closed. It cannot be escalated."
+            if dispute.is_appeal:
+                return "This dispute has already been appealed. Only one appeal is permitted."
             
-            if dispute.tier == DisputeTier.TIER_3_HUMAN and dispute.resolved_at is None:
-                return "This dispute is already escalated and pending Human Moderator review."
-            
-            dispute.tier = DisputeTier.TIER_3_HUMAN
+            if latest_deal.status != DealStatus.DISPUTED:
+                return "The appeal window has expired and funds have already been released."
+
+            # Mark for Senior Arbitrator review
+            dispute.is_appeal = True
+            dispute.appeal_requested_by = user.id
             dispute.resolved_at = None  # Re-open for human review!
-            dispute.escalation_requested_by = user.id
-            dispute.escalation_fee_paid = True
-            latest_deal.status = DealStatus.DISPUTED
+            dispute.tier = DisputeTier.TIER_3_HUMAN
             db.commit()
             
             # Notify other party
             other_phone = latest_deal.seller.phone_or_handle if user.id == latest_deal.buyer_id else latest_deal.buyer.phone_or_handle
             MetaService.send_text_message(
                 db, platform, other_phone,
-                f"⚠️ The dispute for deal '{latest_deal.item_description}' has been escalated to a Human Moderator. Escrow funds remain locked.",
+                f"⚠️ The dispute for deal '{latest_deal.item_description}' has been appealed. "
+                f"It will be reviewed by a Senior Arbitrator. Escrow funds remain locked.",
                 latest_deal.id
             )
             
             session["state"] = "IDLE"
             session["deal_id"] = None
-            return f"Dispute escalated successfully. A Human Moderator has been assigned to audit the case. Escalation fee of KES {settings.ESCALATION_FEE_KES:.2f} has been charged."
+            return (
+                f"Dispute appealed successfully. A Senior Arbitrator will audit the case for final review. "
+                f"Appeal fee of KES {settings.ESCALATION_FEE_KES:.2f} has been charged. "
+                f"This decision will be final within HoldUntil's internal dispute process."
+            )
+
+        # Voluntary release/refund commands during disputes
+        if active_deal_id:
+            deal = db.query(Deal).filter(Deal.id == active_deal_id).first()
+            if deal and deal.status == DealStatus.DISPUTED:
+                from backend.app.models import Dispute, OutcomeType
+                dispute = db.query(Dispute).filter(Dispute.deal_id == deal.id).first()
+                if dispute:
+                    if normalized_text == "RELEASE" and user.id == deal.buyer_id:
+                        # Buyer releases voluntarily
+                        dispute.final_outcome = OutcomeType.RELEASE
+                        dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
+                        db.commit()
+                        
+                        DarajaService.initiate_b2c_payout(db, deal, deal.seller.phone_or_handle, deal.agreed_price, is_refund=False)
+                        MetaService.send_text_message(db, platform, deal.seller.phone_or_handle, f"🎉 The buyer has voluntarily resolved the dispute and released the funds! Payout is processing.", deal.id)
+                        session["deal_id"] = None
+                        session["state"] = "IDLE"
+                        return "You have voluntarily resolved the dispute and released all funds to the seller. Payout is processing."
+                        
+                    elif normalized_text == "REFUND" and user.id == deal.seller_id:
+                        # Seller refunds voluntarily
+                        dispute.final_outcome = OutcomeType.REFUND
+                        dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
+                        db.commit()
+                        
+                        DarajaService.initiate_b2c_payout(db, deal, deal.buyer.phone_or_handle, deal.agreed_price, is_refund=True)
+                        MetaService.send_text_message(db, platform, deal.buyer.phone_or_handle, f"🎉 The seller has voluntarily resolved the dispute and refunded the funds! Refund is processing.", deal.id)
+                        session["deal_id"] = None
+                        session["state"] = "IDLE"
+                        return "You have voluntarily resolved the dispute and returned all funds to the buyer. Refund is processing."
 
         if normalized_text.startswith("PRICE"):
             if active_deal_id:
@@ -180,6 +224,34 @@ class ChatBotService:
         state = session["state"]
         if state == "AWAITING_DESC":
             session["draft_desc"] = text
+            session["state"] = "AWAITING_TYPE"
+            return (
+                "What is the transaction type? Reply with the number:\n"
+                "1. Digital Deliverable\n"
+                "2. Shipped Goods (Courier)\n"
+                "3. Local In-Person Handoff\n"
+                "4. Remote Physical Service"
+            )
+
+        elif state == "AWAITING_TYPE":
+            val = normalized_text.strip()
+            from backend.app.models import DealType
+            if val == "1" or "digital" in val:
+                session["draft_type"] = DealType.DIGITAL
+            elif val == "2" or "shipped" in val:
+                session["draft_type"] = DealType.SHIPPED
+            elif val == "3" or "handoff" in val or "person" in val:
+                session["draft_type"] = DealType.HANDOFF
+            elif val == "4" or "remote" in val or "service" in val:
+                session["draft_type"] = DealType.REMOTE_SERVICE
+            else:
+                return (
+                    "Invalid choice. Please reply with a number 1 to 4:\n"
+                    "1. Digital Deliverable\n"
+                    "2. Shipped Goods (Courier)\n"
+                    "3. Local In-Person Handoff\n"
+                    "4. Remote Physical Service"
+                )
             session["state"] = "AWAITING_PRICE"
             return "Got it. What is the agreed price in Kenyan Shillings (KES)? (Numbers only, e.g. 15000)"
 
@@ -200,10 +272,12 @@ class ChatBotService:
             days = int(days_match.group())
             
             # Create the deal draft in database
+            from backend.app.models import DealType
             deal = Deal(
                 seller_id=user.id,
                 item_description=session["draft_desc"],
                 agreed_price=session["draft_price"],
+                deal_type=session.get("draft_type", DealType.SHIPPED),
                 delivery_deadline=datetime.now(UTC).replace(tzinfo=None) + timedelta(days=days),
                 status=DealStatus.DRAFT,
                 seller_confirmed=True  # Seller created it, so they auto-confirm
@@ -442,10 +516,12 @@ class ChatBotService:
             f"Seller: {seller.phone_or_handle}\n"
             f"Item: {deal.item_description}\n"
             f"Price: KES {deal.agreed_price:.2f}\n\n"
-            f"📜 **Consent & Transparency:**\n"
-            f"\"Before funding, note that if a dispute is filed, a HoldUntil moderator "
-            f"(automated or human) may review this transaction's chat logs to resolve it fairly. "
-            f"Other chats are never accessed. All messages are permanently recorded.\"\n\n"
+            f"📜 **ESCROW AGREEMENT DISPUTE CLAUSE:**\n"
+            f"In the event of a dispute, either party may submit a Notice of Dispute within 5 days of shipment/deadline. "
+            f"Supporting evidence is required. HoldUntil shall freeze funds and facilitate a negotiation window. "
+            f"If unresolved, the Escrow Agent shall render a binding decision based on strict compliance. "
+            f"One appeal is permitted by replying 'APPEAL' (KES 200.00 fee applies), whose senior review is final "
+            f"within HoldUntil's internal dispute process. Governed under Kenyan Law.\n\n"
             f"Reply 'CONFIRM' to accept details & initiate Safaricom M-Pesa STK Push payment.\n"
             f"Reply 'REJECT' to decline."
         )

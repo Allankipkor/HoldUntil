@@ -35,6 +35,8 @@ export default function App() {
   const [moderatorReasoning, setModeratorReasoning] = useState('');
   const [modOutcome, setModOutcome] = useState('release');
   const [modSplitPct, setModSplitPct] = useState(50);
+  const [resolverId, setResolverId] = useState('MOD_1');
+  const [metrics, setMetrics] = useState({ total_disputes: 0, ai_agreement_rate_pct: 100.0 });
   const [checklist, setChecklist] = useState({
     codeMatch: false,
     timelineValid: false,
@@ -60,10 +62,23 @@ export default function App() {
   useEffect(() => {
     if (activeTab === 'moderator') {
       fetchDisputes();
+      fetchMetrics();
     } else if (activeTab === 'admin') {
       fetchUsers();
     }
   }, [activeTab]);
+
+  const fetchMetrics = async () => {
+    try {
+      const res = await fetch('/api/dashboard/metrics');
+      if (res.ok) {
+        const data = await res.json();
+        setMetrics(data);
+      }
+    } catch (e) {
+      console.warn("Failed to fetch system metrics.");
+    }
+  };
 
   // ----------------------------------------------------
   // API INTERACTIONS
@@ -220,6 +235,7 @@ export default function App() {
       formData.append("outcome", modOutcome);
       formData.append("partial_split_percentage", modSplitPct);
       formData.append("reasoning", moderatorReasoning);
+      formData.append("resolver_id", resolverId);
 
       const res = await fetch(`/api/dashboard/disputes/${selectedDisputeId}/resolve`, {
         method: 'POST',
@@ -802,6 +818,34 @@ export default function App() {
                                   {p.c2b_confirmation_ref && (
                                     <span style={{ display: 'block', color: 'var(--primary)' }}>Receipt: {p.c2b_confirmation_ref}</span>
                                   )}
+                                  {p.b2c_payout_ref && (
+                                    <div style={{ marginTop: '6px', borderTop: '1px dashed var(--border-muted)', paddingTop: '4px' }}>
+                                      <span style={{ display: 'block', color: 'var(--text-muted)' }}>B2C Payout Ref:</span>
+                                      <code style={{ fontSize: '0.7rem' }}>{p.b2c_payout_ref}</code>
+                                      {(p.status === 'payout_processing' || p.status === 'refund_processing' || p.status === 'processing') && (
+                                        <button
+                                          onClick={async () => {
+                                            const fd = new FormData();
+                                            fd.append("payment_ref", p.b2c_payout_ref);
+                                            const res = await fetch('/api/dashboard/simulation/mock-mpesa-b2c-callback', {
+                                              method: 'POST',
+                                              body: fd
+                                            });
+                                            if (res.ok) {
+                                              alert("M-Pesa B2C callback simulated successfully!");
+                                              fetchDealDetails(dealDetails.deal.id);
+                                            } else {
+                                              alert("Callback simulation failed.");
+                                            }
+                                          }}
+                                          className="btn btn-primary"
+                                          style={{ padding: '2px 6px', fontSize: '9px', marginTop: '4px', cursor: 'pointer', display: 'block' }}
+                                        >
+                                          Simulate B2C Webhook Callback
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
                                 </td>
                                 <td style={{ padding: '8px', fontWeight: 'bold' }}>KES {p.amount}</td>
                                 <td style={{ padding: '8px' }}>
@@ -822,8 +866,32 @@ export default function App() {
                 ) : (
                   <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
                     <PlusCircle size={32} style={{ margin: '0 auto 12px auto' }} />
-                    <p style={{ fontSize: '0.85rem' }}>No active transaction context loaded.</p>
-                    <p style={{ fontSize: '0.75rem', marginTop: '4px' }}>Type 'SELL' in the Seller view to initiate a deal flow.</p>
+                    <p style={{ fontSize: '0.85rem', marginBottom: '4px' }}>No active transaction context loaded.</p>
+                    <p style={{ fontSize: '0.75rem', marginBottom: '16px' }}>Type 'SELL' in the Seller view to initiate a deal flow.</p>
+                    <div style={{ display: 'flex', gap: '8px', maxWidth: '320px', margin: '0 auto' }}>
+                      <input 
+                        type="text" 
+                        placeholder="Paste invite link or Deal ID" 
+                        className="form-input"
+                        style={{ fontSize: '0.75rem', padding: '6px' }}
+                        id="manual_deal_id_input"
+                      />
+                      <button 
+                        onClick={() => {
+                          const val = document.getElementById('manual_deal_id_input')?.value?.trim();
+                          if (val) {
+                            const uuidMatch = val.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+                            const id = uuidMatch ? uuidMatch[0] : val;
+                            setActiveDealId(id);
+                            fetchDealDetails(id);
+                          }
+                        }}
+                        className="btn btn-primary"
+                        style={{ fontSize: '0.75rem', padding: '6px 12px' }}
+                      >
+                        Load
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -973,7 +1041,12 @@ export default function App() {
             
             {/* ESCALATIONS LIST */}
             <div className="glass-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <h3 style={{ fontSize: '1.1rem', borderBottom: '1px solid var(--border-muted)', paddingBottom: '8px' }}>Escalation Queue</h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-muted)', paddingBottom: '8px' }}>
+                <h3 style={{ fontSize: '1.1rem', margin: 0 }}>Escalation Queue</h3>
+                <div style={{ fontSize: '0.75rem', background: 'rgba(255,255,255,0.05)', padding: '4px 8px', borderRadius: '4px' }}>
+                  AI Agreement: <b>{metrics.ai_agreement_rate_pct}%</b> ({metrics.total_disputes})
+                </div>
+              </div>
               
               <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {dashboardLoading ? (
@@ -993,9 +1066,20 @@ export default function App() {
                     >
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
                         <span style={{ fontWeight: '600', fontSize: '0.85rem' }}>{disp.item_description}</span>
-                        <span className={`status-badge ${disp.resolved_at ? 'status-completed' : 'status-disputed'}`} style={{ fontSize: '9px' }}>
-                          {disp.resolved_at ? 'Resolved' : 'Active'}
-                        </span>
+                        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                          {disp.sla_status === "breached" && (
+                            <span style={{ fontSize: '8px', background: '#EF4444', color: 'white', padding: '2px 4px', borderRadius: '4px', fontWeight: 'bold' }}>🚨 SLA BREACH</span>
+                          )}
+                          {disp.sla_status === "approaching" && (
+                            <span style={{ fontSize: '8px', background: '#F59E0B', color: 'black', padding: '2px 4px', borderRadius: '4px', fontWeight: 'bold' }}>⚠️ SLA WARN</span>
+                          )}
+                          {disp.is_appeal && (
+                            <span style={{ fontSize: '8px', background: '#8B5CF6', color: 'white', padding: '2px 4px', borderRadius: '4px', fontWeight: 'bold' }}>🛡️ APPEAL</span>
+                          )}
+                          <span className={`status-badge ${disp.resolved_at ? 'status-completed' : 'status-disputed'}`} style={{ fontSize: '9px' }}>
+                            {disp.resolved_at ? 'Resolved' : 'Active'}
+                          </span>
+                        </div>
                       </div>
                       <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
                         Filer: {disp.filed_by_handle} | Price: KES {disp.agreed_price}
@@ -1115,6 +1199,42 @@ export default function App() {
                         </p>
                       </div>
 
+                      {selectedDisputeDetails.disputes[0].appeal_fee_payout_ref && (
+                        <div style={{ background: 'rgba(139,92,246,0.06)', border: '1px solid var(--primary)', padding: '12px', borderRadius: '8px', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <div style={{ fontWeight: 'bold' }}>Appeal Refund Status</div>
+                          <div>Status: <span className="status-badge" style={{ fontSize: '9px' }}>{selectedDisputeDetails.disputes[0].appeal_fee_refund_status}</span></div>
+                          {selectedDisputeDetails.disputes[0].appeal_fee_refund_status === 'pending' && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const fd = new FormData();
+                                fd.append("payment_ref", selectedDisputeDetails.disputes[0].appeal_fee_payout_ref);
+                                const res = await fetch('/api/dashboard/simulation/mock-mpesa-b2c-callback', {
+                                  method: 'POST',
+                                  body: fd
+                                });
+                                if (res.ok) {
+                                  alert("Appeal refund webhook callback simulated successfully!");
+                                  // Refresh data
+                                  const discRes = await fetch('/api/dashboard/disputes');
+                                  if (discRes.ok) {
+                                    const data = await discRes.json();
+                                    setDisputes(data);
+                                    selectDispute(selectedDisputeId);
+                                  }
+                                } else {
+                                  alert("Simulation failed.");
+                                }
+                              }}
+                              className="btn btn-primary"
+                              style={{ padding: '4px 8px', fontSize: '9px', cursor: 'pointer', alignSelf: 'flex-start' }}
+                            >
+                              Simulate Appeal Refund Webhook Callback
+                            </button>
+                          )}
+                        </div>
+                      )}
+
                       {/* Checklist */}
                       <div style={{ background: 'var(--bg-panel)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-muted)', fontSize: '0.75rem' }}>
                         <h4 style={{ fontSize: '0.85rem', marginBottom: '8px' }}>Human Checklist Rubric</h4>
@@ -1136,6 +1256,19 @@ export default function App() {
 
                       {/* Decision Center Form */}
                       <form onSubmit={handleResolveDispute} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                        <div>
+                          <label style={{ fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>Assign Staff User (Resolver Role Check)</label>
+                          <select 
+                            value={resolverId} 
+                            onChange={(e) => setResolverId(e.target.value)}
+                            className="form-input"
+                          >
+                            <option value="MOD_1">MOD_1 (Mediator role - first-instance only)</option>
+                            <option value="ARB_1">ARB_1 (Arbitrator role - can resolve appeals)</option>
+                            <option value="ADMIN_1">ADMIN_1 (Admin role - super permissions)</option>
+                          </select>
+                        </div>
+
                         <div>
                           <label style={{ fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>Verdict Outcome</label>
                           <select 

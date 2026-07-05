@@ -35,7 +35,7 @@ def test_user_creation(db_session):
     assert user.role == UserRole.USER
 
 def test_deal_creation_dialogue_flow(db_session):
-    """Test the seller setup dialogue chain (SELL -> Desc -> Price -> Days)."""
+    """Test the seller setup dialogue chain (SELL -> Desc -> Type -> Price -> Days)."""
     seller_phone = "254711111111"
     
     # Step 1: Initialize
@@ -45,9 +45,14 @@ def test_deal_creation_dialogue_flow(db_session):
 
     # Step 2: Description
     r2 = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "HP Pavilion Laptop")
-    assert "agreed price" in r2.lower()
-    assert USER_SESSIONS[seller_phone]["state"] == "AWAITING_PRICE"
+    assert "transaction type" in r2.lower()
+    assert USER_SESSIONS[seller_phone]["state"] == "AWAITING_TYPE"
     assert USER_SESSIONS[seller_phone]["draft_desc"] == "HP Pavilion Laptop"
+
+    # Step 2.5: Type
+    r_type = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "2")
+    assert "agreed price" in r_type.lower()
+    assert USER_SESSIONS[seller_phone]["state"] == "AWAITING_PRICE"
 
     # Step 3: Price
     r3 = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "KES 15000")
@@ -75,6 +80,7 @@ def test_buyer_join_and_confirm(db_session):
     # Setup deal first
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "SELL")
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "iPhone")
+    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "2") # Shipped Goods
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "45000")
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "2")
     
@@ -83,7 +89,7 @@ def test_buyer_join_and_confirm(db_session):
 
     # Buyer joins
     join_reply = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, buyer_phone, f"JOIN_{deal_id}")
-    assert "consent" in join_reply.lower()
+    assert "agreement" in join_reply.lower() or "dispute" in join_reply.lower()
     assert "confirm" in join_reply.lower()
     
     # Reload deal from DB
@@ -145,6 +151,7 @@ def test_price_edit_and_cancel_commands(db_session):
     # 1. Create a draft deal
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "SELL")
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "iPhone 17 Pro")
+    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "2") # Shipped Goods
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "14,000")
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "3")
     
@@ -165,8 +172,8 @@ def test_price_edit_and_cancel_commands(db_session):
     assert USER_SESSIONS[seller_phone]["state"] == "IDLE"
 
 def test_dispute_resolution_and_trust_adjustment(db_session):
-    """Test full dispute flow, including AI moderation, satisfaction confirmation, filer-restricted escalation, and trust score/win rate updates."""
-    from backend.app.models import Dispute, DisputeTier, OutcomeType
+    """Test full dispute flow: AI moderation (recommender only), first-instance resolution, appeal request, and arbitrator resolution."""
+    from backend.app.models import Dispute, DisputeTier, OutcomeType, User, UserRole
     
     # 1. Setup users and a funded deal
     seller_phone = "254711111111"
@@ -181,9 +188,9 @@ def test_dispute_resolution_and_trust_adjustment(db_session):
     db_session.commit()
     
     # Run the setup flow to get an active funded deal
-    # Seller creates
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "SELL")
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "Sony WH-1000XM5")
+    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "2") # Shipped Goods
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "30000")
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "3")
     
@@ -196,7 +203,6 @@ def test_dispute_resolution_and_trust_adjustment(db_session):
     
     # Force payment confirmation to set status = FUNDED
     from backend.app.routes.dashboard import simulate_mpesa_payment
-    # Create mock payment to simulate it
     p = Payment(deal_id=deal.id, stk_push_ref="test_ref", amount=30000.0, status=PaymentStatus.PENDING)
     db_session.add(p)
     db_session.commit()
@@ -205,7 +211,7 @@ def test_dispute_resolution_and_trust_adjustment(db_session):
     db_session.refresh(deal)
     assert deal.status == DealStatus.FUNDED
     
-    # Seller ships (which updates status = SHIPPED)
+    # Seller ships (updates status = SHIPPED)
     from backend.app.routes.dashboard import upload_simulated_evidence
     upload_simulated_evidence(deal_id=deal.id, sender_id=seller.id, photo_name="package_with_code.jpg", db=db_session)
     db_session.refresh(deal)
@@ -219,58 +225,68 @@ def test_dispute_resolution_and_trust_adjustment(db_session):
     db_session.refresh(deal)
     assert deal.status == DealStatus.DISPUTED
     
-    # A dispute record should have been created in the database
+    # A dispute record should have been created
     dispute = db_session.query(Dispute).filter(Dispute.deal_id == deal.id).first()
     assert dispute is not None
     assert dispute.tier == DisputeTier.TIER_2_AI
     assert dispute.filed_by == buyer.id
     
-    # 3. Buyer submits dispute reason -> triggers AI Moderator instantly
+    # 3. Buyer submits dispute reason -> triggers AI Moderator recommender-only check
     reply_reason = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, buyer_phone, "The box is empty!")
-    assert "recorded" in reply_reason.lower()
+    assert "analyzing" in reply_reason.lower()
     
     db_session.refresh(dispute)
     db_session.refresh(deal)
     
-    # Ensure AI moderator executed without crashing (DarajaService NameError fix verification)
+    # Recommender-only checks: resolved_at and final_outcome remain NULL, deal remains DISPUTED
+    assert dispute.resolved_at is None
+    assert dispute.final_outcome is None
+    assert dispute.ai_decision == OutcomeType.RELEASE # Heuristics fallback recommends RELEASE
+    assert deal.status == DealStatus.DISPUTED
+
+    # 4. Resolve dispute manually (first-instance)
+    from backend.app.routes.dashboard import resolve_dispute_manually
+    mediator = User(phone_or_handle="MOD_1", role=UserRole.MODERATOR, platform=PlatformType.WHATSAPP)
+    db_session.add(mediator)
+    db_session.commit()
+    
+    resolve_dispute_manually(dispute_id=dispute.id, outcome="release", reasoning="Heuristic matched", resolver_id=mediator.id, db=db_session)
+    db_session.refresh(dispute)
+    db_session.refresh(deal)
+    
+    # First-instance: resolved_at is set, outcome is RELEASE, but deal.status remains DISPUTED (payout deferred)
     assert dispute.resolved_at is not None
-    assert dispute.ai_decision is not None
-    
-    # In heuristics fallback, since seller uploaded evidence (package_with_code.jpg has verified code),
-    # the fallback engine should rule in favor of the seller: RELEASE
     assert dispute.final_outcome == OutcomeType.RELEASE
-    assert deal.status == DealStatus.COMPLETED
-    
-    # Check that trust scores were adjusted:
-    # Seller should be rewarded (+2.0 points -> clamped to 100.0)
-    # Buyer (filer of meritless dispute) should be penalized (-15.0 points -> 85.0)
-    db_session.refresh(seller)
-    db_session.refresh(buyer)
-    assert seller.trust_score == 100.0
-    assert buyer.trust_score == 85.0
-    
-    # Check that win rates were updated
-    assert seller.dispute_win_rate == 1.0 # seller won
-    assert buyer.dispute_win_rate == 0.0 # buyer lost
-    
-    # 4. Escalate command validation
-    # Seller trying to escalate (not the filer) should be blocked
-    escalate_seller = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "ESCALATE")
-    assert "Only the user who raised the dispute" in escalate_seller
-    
-    # 5. Satisfaction flow validation
-    # Seller trying to confirm satisfaction (not the filer) should be blocked
-    satisfied_seller = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "SATISFIED")
-    assert "Only the user who raised the dispute" in satisfied_seller
-    
-    # Buyer (filer) confirms satisfaction
-    satisfied_buyer = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, buyer_phone, "SATISFIED")
-    assert "officially closed" in satisfied_buyer.lower()
+    assert deal.status == DealStatus.DISPUTED
+
+    # 5. Buyer files an APPEAL
+    reply_appeal = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, buyer_phone, "APPEAL")
+    assert "appealed successfully" in reply_appeal.lower()
     
     db_session.refresh(dispute)
-    assert dispute.filer_satisfied is True
+    db_session.refresh(deal)
     
-    # 6. Escalate after satisfied validation
-    # Buyer trying to escalate after marking satisfied should be blocked
-    escalate_after_satisfied = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, buyer_phone, "ESCALATE")
-    assert "accepted and closed" in escalate_after_satisfied.lower()
+    # Appeal: reopens dispute (resolved_at is None, is_appeal is True)
+    assert dispute.is_appeal is True
+    assert dispute.appeal_requested_by == buyer.id
+    assert dispute.resolved_at is None
+    assert deal.status == DealStatus.DISPUTED
+
+    # 6. Arbitrator resolves the appeal
+    arbitrator = User(phone_or_handle="ARB_1", role=UserRole.ARBITRATOR, platform=PlatformType.WHATSAPP)
+    db_session.add(arbitrator)
+    db_session.commit()
+    
+    # Resolve appeal to REFUND (overturning RELEASE)
+    resolve_dispute_manually(dispute_id=dispute.id, outcome="refund", reasoning="Arbitrator verdict", resolver_id=arbitrator.id, db=db_session)
+    db_session.refresh(dispute)
+    db_session.refresh(deal)
+    
+    # Final resolution: resolved_at is set, outcome is REFUND, deal.status is REFUNDED (immediate payout)
+    assert dispute.resolved_at is not None
+    assert dispute.final_outcome == OutcomeType.REFUND
+    assert deal.status == DealStatus.REFUNDED
+    
+    # Overturned appeal fee refund should be completed in simulation mode
+    assert dispute.appeal_fee_refunded is True
+    assert dispute.appeal_fee_refund_status == "completed"

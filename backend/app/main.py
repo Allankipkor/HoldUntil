@@ -23,6 +23,32 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing database tables...")
     Base.metadata.create_all(bind=engine)
     
+    # Seed staff users
+    db = SessionLocal()
+    try:
+        from backend.app.models import User, UserRole
+        staff = [
+            ("MOD_1", UserRole.MODERATOR),
+            ("ARB_1", UserRole.ARBITRATOR),
+            ("ADMIN_1", UserRole.ADMIN)
+        ]
+        for phone, role in staff:
+            exists = db.query(User).filter(User.phone_or_handle == phone).first()
+            if not exists:
+                user = User(
+                    phone_or_handle=phone,
+                    role=role,
+                    platform=PlatformType.WHATSAPP,
+                    trust_score=100.0
+                )
+                db.add(user)
+                logger.info(f"Seeded staff user: {phone} as {role.value}")
+        db.commit()
+    except Exception as seed_err:
+        logger.error(f"Error seeding staff users: {seed_err}")
+    finally:
+        db.close()
+        
     # Start APScheduler tasks
     logger.info("Initializing background scheduler...")
     start_scheduler(SessionLocal)

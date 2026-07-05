@@ -159,94 +159,37 @@ DECISION INSTRUCTIONS:
         dispute.ai_reasoning = result["reasoning"]
         dispute.ai_confidence = result["confidence"]
         
-        # For Tier 2, if confidence is high (> 0.8), we can auto-apply the verdict!
-        # Otherwise, or by default, we write the proposal and wait for dashboard review.
-        # Let's auto-apply for AI moderator to keep it smooth, but write it down.
-        # Wait, the prompt says "Tier 2 - AI Moderator (default for actual disputes): Required output: exactly one of Release / Refund / Partial split... human dashboard is Tier 3 (opt-in escalation only)".
-        # Yes! So Tier 2 decisions auto-execute unless escalated! Let's execute the payout.
-        # Determine filer and non-filer for satisfaction checks
+        # Determine filer and non-filer for notifications
         filer_user = seller if dispute.filed_by == seller.id else buyer
         non_filer_user = buyer if dispute.filed_by == seller.id else seller
 
-        if result["outcome"] == "release":
-            dispute.final_outcome = OutcomeType.RELEASE
-            dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
-            deal.status = DealStatus.COMPLETED
-            try:
-                DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, deal.agreed_price, is_refund=False)
-            except Exception as pay_err:
-                logger.error(f"Auto-payout error: {pay_err}")
-            
-            cls.apply_dispute_outcome(db, deal, dispute, OutcomeType.RELEASE)
-            
-            # Send notifications with option to escalate
-            MetaService.send_text_message(
-                db, PlatformType.WHATSAPP, filer_user.phone_or_handle,
-                f"🤖 Automated Moderator Verdict: Payout of KES {deal.agreed_price:.2f} has been released to the seller.\n\n"
-                f"Rationale: {result['reasoning']}\n\n"
-                f"Are you satisfied with this decision? Reply 'SATISFIED' to accept, or 'ESCALATE' to request a Human Moderator review.",
-                deal.id
-            )
-            MetaService.send_text_message(
-                db, PlatformType.WHATSAPP, non_filer_user.phone_or_handle,
-                f"🤖 Automated Moderator Verdict: Payout of KES {deal.agreed_price:.2f} has been released to the seller.\n\n"
-                f"Rationale: {result['reasoning']}",
-                deal.id
-            )
-        elif result["outcome"] == "refund":
-            dispute.final_outcome = OutcomeType.REFUND
-            dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
-            deal.status = DealStatus.REFUNDED
-            try:
-                DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, deal.agreed_price, is_refund=True)
-            except Exception as refund_err:
-                logger.error(f"Auto-refund error: {refund_err}")
-            
-            cls.apply_dispute_outcome(db, deal, dispute, OutcomeType.REFUND)
-            
-            # Send notifications with option to escalate
-            MetaService.send_text_message(
-                db, PlatformType.WHATSAPP, filer_user.phone_or_handle,
-                f"🤖 Automated Moderator Verdict: Funds of KES {deal.agreed_price:.2f} have been refunded to the buyer.\n\n"
-                f"Rationale: {result['reasoning']}\n\n"
-                f"Are you satisfied with this decision? Reply 'SATISFIED' to accept, or 'ESCALATE' to request a Human Moderator review.",
-                deal.id
-            )
-            MetaService.send_text_message(
-                db, PlatformType.WHATSAPP, non_filer_user.phone_or_handle,
-                f"🤖 Automated Moderator Verdict: Funds of KES {deal.agreed_price:.2f} have been refunded to the buyer.\n\n"
-                f"Rationale: {result['reasoning']}",
-                deal.id
-            )
-        elif result["outcome"] == "partial_split":
-            dispute.final_outcome = OutcomeType.PARTIAL_SPLIT
-            dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
-            deal.status = DealStatus.COMPLETED # split completed
-            pct = result.get("partial_split_percentage", 50) or 50
-            seller_amt = (pct / 100.0) * deal.agreed_price
-            buyer_amt = deal.agreed_price - seller_amt
-            try:
-                DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, seller_amt, is_refund=False)
-                DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, buyer_amt, is_refund=True)
-            except Exception as split_err:
-                logger.error(f"Auto-split payout error: {split_err}")
-            
-            cls.apply_dispute_outcome(db, deal, dispute, OutcomeType.PARTIAL_SPLIT, partial_split_percentage=pct)
-            
-            # Send notifications with option to escalate
-            MetaService.send_text_message(
-                db, PlatformType.WHATSAPP, filer_user.phone_or_handle,
-                f"🤖 Automated Moderator Verdict: Split decision. KES {seller_amt:.2f} paid to the seller and KES {buyer_amt:.2f} refunded to the buyer.\n\n"
-                f"Rationale: {result['reasoning']}\n\n"
-                f"Are you satisfied with this decision? Reply 'SATISFIED' to accept, or 'ESCALATE' to request a Human Moderator review.",
-                deal.id
-            )
-            MetaService.send_text_message(
-                db, PlatformType.WHATSAPP, non_filer_user.phone_or_handle,
-                f"🤖 Automated Moderator Verdict: Split decision. KES {seller_amt:.2f} paid to the seller and KES {buyer_amt:.2f} refunded to the buyer.\n\n"
-                f"Rationale: {result['reasoning']}",
-                deal.id
-            )
+        # AI acts as recommender only. The deal status remains DISPUTED.
+        # Dispute resolved_at and final_outcome remain NULL.
+        deal.status = DealStatus.DISPUTED
+        
+        # Send platform notifications indicating automated findings and routing to Human Moderator
+        MetaService.send_text_message(
+            db, PlatformType.WHATSAPP, filer_user.phone_or_handle,
+            f"🤖 HoldUntil Automated Check: We have analyzed the deal. "
+            f"Supporting evidence has been logged (Day 0). "
+            f"We have routed your dispute to a Human Moderator for a binding decision. "
+            f"AI Recommendation: {result['outcome'].upper()} (Confidence: {int(result['confidence']*100)}%). "
+            f"Escrow funds will remain frozen until a decision is rendered.\n\n"
+            f"💡 You can resolve this informally: The buyer can reply 'RELEASE' to release funds to the seller, "
+            f"or the seller can reply 'REFUND' to return funds to the buyer.",
+            deal.id
+        )
+        
+        MetaService.send_text_message(
+            db, PlatformType.WHATSAPP, non_filer_user.phone_or_handle,
+            f"🤖 HoldUntil Notification: A dispute has been filed. "
+            f"The case has been routed to a Human Moderator for a binding decision. "
+            f"AI Recommendation: {result['outcome'].upper()}. "
+            f"Escrow funds remain frozen.\n\n"
+            f"💡 You can resolve this informally: The buyer can reply 'RELEASE' to release funds to the seller, "
+            f"or the seller can reply 'REFUND' to return funds to the buyer.",
+            deal.id
+        )
 
         db.commit()
         return result

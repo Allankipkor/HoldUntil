@@ -2,7 +2,7 @@ import uuid
 from fastapi import APIRouter, Request, Depends, HTTPException
 from sqlalchemy.orm import Session
 from backend.app.database import get_db
-from backend.app.models import Payment, PaymentStatus, Deal, DealStatus, PlatformType
+from backend.app.models import Payment, PaymentStatus, Deal, DealStatus, PlatformType, Dispute
 from backend.app.services.meta_service import MetaService
 import logging
 
@@ -103,5 +103,61 @@ async def mpesa_b2c_callback(request: Request, db: Session = Depends(get_db)):
     """Callback endpoint for B2C payout operations."""
     payload = await request.json()
     logger.info(f"Received M-Pesa B2C Callback: {payload}")
-    # Parse payout success, update payments status
+    
+    result = payload.get("Result", {})
+    conversation_id = result.get("ConversationID")
+    result_code = result.get("ResultCode")
+    result_desc = result.get("ResultDesc")
+    
+    # 1. Check if this ConversationID matches a Dispute's appeal_fee_payout_ref
+    dispute = db.query(Dispute).filter(Dispute.appeal_fee_payout_ref == conversation_id).first()
+    if dispute:
+        if result_code == 0:
+            dispute.appeal_fee_refund_status = "completed"
+            dispute.appeal_fee_refunded = True
+        else:
+            dispute.appeal_fee_refund_status = "failed"
+            dispute.appeal_fee_refunded = False
+        db.commit()
+        logger.info(f"Processed B2C Appeal Refund callback for Dispute {dispute.id}, status: {dispute.appeal_fee_refund_status}")
+        return {"ResultCode": 0, "ResultDesc": "Success"}
+
+    # 2. Otherwise check if it matches a standard Payment's b2c_payout_ref
+    payment = db.query(Payment).filter(Payment.b2c_payout_ref == conversation_id).first()
+    if payment:
+        deal = db.query(Deal).filter(Deal.id == payment.deal_id).first()
+        if not deal:
+            logger.warning(f"Deal linked to payment {payment.id} not found.")
+            return {"status": "ignored"}
+
+        is_refund = (payment.status == PaymentStatus.REFUND_PROCESSING)
+        
+        if result_code == 0:
+            payment.status = PaymentStatus.REFUND_COMPLETED if is_refund else PaymentStatus.PAYOUT_COMPLETED
+            deal.status = DealStatus.REFUNDED if is_refund else DealStatus.COMPLETED
+            db.commit()
+            
+            # Send notifications
+            recipient_phone = deal.buyer.phone_or_handle if is_refund else deal.seller.phone_or_handle
+            MetaService.send_text_message(
+                db, PlatformType.WHATSAPP, recipient_phone,
+                f"💰 M-Pesa B2C Payout of KES {payment.amount:.2f} completed successfully! Receipt Ref: {conversation_id}.",
+                deal.id
+            )
+            logger.info(f"Processed B2C Deal Payout success callback for Payment {payment.id}")
+        else:
+            payment.status = PaymentStatus.FAILED
+            deal.status = DealStatus.DISPUTED
+            db.commit()
+            
+            recipient_phone = deal.buyer.phone_or_handle if is_refund else deal.seller.phone_or_handle
+            MetaService.send_text_message(
+                db, PlatformType.WHATSAPP, recipient_phone,
+                f"❌ M-Pesa B2C Payout of KES {payment.amount:.2f} failed: {result_desc}.",
+                deal.id
+            )
+            logger.warning(f"B2C Deal Payout failed callback for Payment {payment.id}: {result_desc}")
+            
+        return {"ResultCode": 0, "ResultDesc": "Success"}
+        
     return {"ResultCode": 0, "ResultDesc": "Success"}

@@ -16,7 +16,14 @@ class PlatformType(str, Enum):
 class UserRole(str, Enum):
     USER = "user"
     MODERATOR = "moderator"
+    ARBITRATOR = "arbitrator"
     ADMIN = "admin"
+
+class DealType(str, Enum):
+    DIGITAL = "digital"
+    SHIPPED = "shipped"
+    HANDOFF = "handoff"
+    REMOTE_SERVICE = "remote_service"
 
 class DealStatus(str, Enum):
     DRAFT = "draft"
@@ -81,6 +88,7 @@ class Deal(Base):
     tracking_number = Column(String(100), nullable=True)
     seller_confirmed = Column(Boolean, default=False)
     buyer_confirmed = Column(Boolean, default=False)
+    deal_type = Column(SQLEnum(DealType), default=DealType.SHIPPED, nullable=False)
     created_at = Column(DateTime, default=utcnow)
 
     # Relationships
@@ -129,6 +137,16 @@ class Dispute(Base):
     final_outcome = Column(SQLEnum(OutcomeType), nullable=True)
     resolved_at = Column(DateTime, nullable=True)
     filer_satisfied = Column(Boolean, nullable=True, default=None)
+    partial_split_percentage = Column(Integer, nullable=True)
+    
+    # Appeal tracking
+    is_appeal = Column(Boolean, default=False, nullable=False)
+    appeal_requested_by = Column(String(36), ForeignKey("users.id"), nullable=True)
+    appeal_resolved_at = Column(DateTime, nullable=True)
+    appeal_fee_refunded = Column(Boolean, default=False, nullable=False)
+    appeal_fee_refund_status = Column(String(20), default="none", nullable=False)
+    appeal_fee_payout_ref = Column(String(100), nullable=True, index=True)
+    
     created_at = Column(DateTime, default=utcnow)
 
     # Relationships

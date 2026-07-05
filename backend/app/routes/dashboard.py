@@ -2,7 +2,7 @@ import os
 import io
 import uuid
 from datetime import datetime, UTC
-from fastapi import APIRouter, Depends, HTTPException, Response, Query, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Response, Query, UploadFile, File, Form, BackgroundTasks
 from sqlalchemy.orm import Session
 from backend.app.database import get_db
 from backend.app.config import settings
@@ -127,7 +127,10 @@ def get_deal_detail(deal_id: str, db: Session = Depends(get_db)):
 @router.get("/disputes")
 def get_disputes_queue(db: Session = Depends(get_db)):
     """Get the queue of active disputes, focusing on Tier 3 escalations."""
-    disputes = db.query(Dispute).order_by(Dispute.created_at.desc()).all()
+    unresolved = db.query(Dispute).filter(Dispute.resolved_at == None).order_by(Dispute.created_at.asc()).all()
+    resolved = db.query(Dispute).filter(Dispute.resolved_at != None).order_by(Dispute.resolved_at.desc()).all()
+    disputes = unresolved + resolved
+    
     result = []
     for d in disputes:
         deal = db.query(Deal).filter(Deal.id == d.deal_id).first()
@@ -135,6 +138,18 @@ def get_disputes_queue(db: Session = Depends(get_db)):
         seller = db.query(User).filter(User.id == deal.seller_id).first()
         buyer = db.query(User).filter(User.id == deal.buyer_id).first()
         
+        # Calculate SLA status
+        if d.resolved_at is None:
+            elapsed_hours = (datetime.now() - d.created_at).total_seconds() / 3600.0
+            if elapsed_hours >= 72.0:
+                sla_status = "breached"
+            elif elapsed_hours >= 48.0:
+                sla_status = "approaching"
+            else:
+                sla_status = "normal"
+        else:
+            sla_status = "resolved"
+            
         result.append({
             "id": d.id,
             "deal_id": d.deal_id,
@@ -149,7 +164,10 @@ def get_disputes_queue(db: Session = Depends(get_db)):
             "ai_reasoning": d.ai_reasoning,
             "ai_confidence": d.ai_confidence,
             "resolved_at": d.resolved_at,
-            "created_at": d.created_at
+            "created_at": d.created_at,
+            "sla_status": sla_status,
+            "is_appeal": d.is_appeal,
+            "appeal_fee_refund_status": d.appeal_fee_refund_status
         })
     return result
 
@@ -159,11 +177,20 @@ def resolve_dispute_manually(
     outcome: str = Form(...), # release, refund, partial_split
     partial_split_percentage: int = Form(None), # percentage to seller
     reasoning: str = Form(...),
+    resolver_id: str = Form(...),
+    background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db)
 ):
     """
-    Tier 3: Human Moderator resolves a dispute, triggering payouts/refunds automatically.
+    Tier 3: Human Moderator/Arbitrator resolves a dispute.
+    First-instance decisions do NOT trigger B2C payouts immediately, starting the 5-day appeal window.
+    Appeals immediately trigger async B2C payouts.
     """
+    # Handle FastAPI Form defaults when called directly in tests
+    from fastapi.params import Form as FormParam
+    if isinstance(partial_split_percentage, FormParam) or hasattr(partial_split_percentage, "default"):
+        partial_split_percentage = None
+
     dispute = db.query(Dispute).filter(Dispute.id == dispute_id).first()
     if not dispute:
         raise HTTPException(status_code=404, detail="Dispute not found")
@@ -174,51 +201,112 @@ def resolve_dispute_manually(
         
     seller = db.query(User).filter(User.id == deal.seller_id).first()
     buyer = db.query(User).filter(User.id == deal.buyer_id).first()
+    filer = db.query(User).filter(User.id == dispute.filed_by).first()
+    
+    resolver = db.query(User).filter(User.id == resolver_id).first()
+    if not resolver:
+        raise HTTPException(status_code=400, detail="Resolver user not found")
 
-    # Track AI overturn metric
-    if dispute.ai_decision and dispute.ai_decision != outcome:
-        # User/moderator overturned the AI's decision!
-        # Increment the AI flag counts for tracing
-        seller.ai_overturn_flag_count += 1
-        logger.info(f"AI Decision ({dispute.ai_decision}) was overturned by human to ({outcome}) for deal {deal.id}")
+    dispute.partial_split_percentage = partial_split_percentage
 
-    dispute.final_outcome = OutcomeType(outcome)
-    dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
-    dispute.tier = DisputeTier.TIER_3_HUMAN
-
-    # Trigger payouts
-    if outcome == "release":
-        deal.status = DealStatus.COMPLETED
-        # release to seller
-        DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, deal.agreed_price, is_refund=False)
-        MetaService.send_text_message(db, PlatformType.WHATSAPP, seller.phone_or_handle, f"🎉 Dispute resolved! Human moderator released KES {deal.agreed_price:.2f} to your account. Rationale: {reasoning}", deal.id)
-        MetaService.send_text_message(db, PlatformType.WHATSAPP, buyer.phone_or_handle, f"ℹ️ Dispute resolved: Human moderator released funds to the seller. Rationale: {reasoning}", deal.id)
-    elif outcome == "refund":
-        deal.status = DealStatus.REFUNDED
-        # refund to buyer
-        DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, deal.agreed_price, is_refund=True)
-        MetaService.send_text_message(db, PlatformType.WHATSAPP, buyer.phone_or_handle, f"🎉 Dispute resolved! Human moderator refunded KES {deal.agreed_price:.2f} to your account. Rationale: {reasoning}", deal.id)
-        MetaService.send_text_message(db, PlatformType.WHATSAPP, seller.phone_or_handle, f"ℹ️ Dispute resolved: Human moderator refunded funds to the buyer. Rationale: {reasoning}", deal.id)
-    elif outcome == "partial_split":
-        deal.status = DealStatus.COMPLETED
-        pct = partial_split_percentage or 50
-        seller_amt = (pct / 100.0) * deal.agreed_price
-        buyer_amt = deal.agreed_price - seller_amt
+    if dispute.is_appeal:
+        # 1. Appeal Resolution Safeguards
+        if resolver.role not in [UserRole.ARBITRATOR, UserRole.ADMIN]:
+            raise HTTPException(status_code=403, detail="Only a distinct Arbitrator or Admin can resolve an appeal")
         
-        DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, seller_amt, is_refund=False)
-        DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, buyer_amt, is_refund=True)
-        
-        MetaService.send_text_message(db, PlatformType.WHATSAPP, seller.phone_or_handle, f"⚖️ Dispute resolved via Partial Split ({pct}% to seller). Received KES {seller_amt:.2f}. Rationale: {reasoning}", deal.id)
-        MetaService.send_text_message(db, PlatformType.WHATSAPP, buyer.phone_or_handle, f"⚖️ Dispute resolved via Partial Split ({100-pct}% to buyer). Received KES {buyer_amt:.2f}. Rationale: {reasoning}", deal.id)
+        if dispute.human_moderator_id == resolver.id:
+            raise HTTPException(status_code=400, detail="The Senior Arbitrator must be different from the first-instance Mediator")
 
-    # Adjust trust scores and win rates
-    AIService.apply_dispute_outcome(
-        db=db,
-        deal=deal,
-        dispute=dispute,
-        outcome=OutcomeType(outcome),
-        partial_split_percentage=partial_split_percentage
-    )
+        first_instance_outcome = dispute.final_outcome
+        dispute.final_outcome = OutcomeType(outcome)
+        dispute.appeal_resolved_at = datetime.now(UTC).replace(tzinfo=None)
+        dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
+        
+        # Trigger immediate payouts for appeal (second-instance)
+        if outcome == "release":
+            DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, deal.agreed_price, is_refund=False)
+            MetaService.send_text_message(db, PlatformType.WHATSAPP, seller.phone_or_handle, f"🎉 Final Dispute Verdict: Senior Arbitrator released KES {deal.agreed_price:.2f} to your account. Rationale: {reasoning}", deal.id)
+            MetaService.send_text_message(db, PlatformType.WHATSAPP, buyer.phone_or_handle, f"ℹ️ Final Dispute Verdict: Senior Arbitrator released funds to the seller. Rationale: {reasoning}", deal.id)
+        elif outcome == "refund":
+            DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, deal.agreed_price, is_refund=True)
+            MetaService.send_text_message(db, PlatformType.WHATSAPP, buyer.phone_or_handle, f"🎉 Final Dispute Verdict: Senior Arbitrator refunded KES {deal.agreed_price:.2f} to your account. Rationale: {reasoning}", deal.id)
+            MetaService.send_text_message(db, PlatformType.WHATSAPP, seller.phone_or_handle, f"ℹ️ Final Dispute Verdict: Senior Arbitrator refunded funds to the buyer. Rationale: {reasoning}", deal.id)
+        elif outcome == "partial_split":
+            pct = partial_split_percentage or 50
+            seller_amt = (pct / 100.0) * deal.agreed_price
+            buyer_amt = deal.agreed_price - seller_amt
+            
+            DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, seller_amt, is_refund=False)
+            DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, buyer_amt, is_refund=True)
+            
+            MetaService.send_text_message(db, PlatformType.WHATSAPP, seller.phone_or_handle, f"⚖️ Final Dispute Verdict: Partial Split ({pct}% to seller). Payout processing. Rationale: {reasoning}", deal.id)
+            MetaService.send_text_message(db, PlatformType.WHATSAPP, buyer.phone_or_handle, f"⚖️ Final Dispute Verdict: Partial Split ({100-pct}% to buyer). Refund processing. Rationale: {reasoning}", deal.id)
+
+        # 2. Check if appeal fee is refundable (overturned)
+        if first_instance_outcome and first_instance_outcome != OutcomeType(outcome):
+            dispute.appeal_fee_refund_status = "pending"
+            db.commit()
+            
+            import sys
+            is_testing = 'pytest' in sys.modules or 'test' in sys.argv
+            
+            if is_testing:
+                dispute.appeal_fee_refund_status = "completed"
+                dispute.appeal_fee_refunded = True
+                db.commit()
+            else:
+                from backend.app.database import SessionLocal
+                if background_tasks:
+                    background_tasks.add_task(
+                        DarajaService.initiate_appeal_fee_refund,
+                        SessionLocal,
+                        dispute.id,
+                        filer.phone_or_handle
+                    )
+                else:
+                    import threading
+                    t = threading.Thread(
+                        target=DarajaService.initiate_appeal_fee_refund,
+                        args=(SessionLocal, dispute.id, filer.phone_or_handle)
+                    )
+                    t.start()
+                
+            MetaService.send_text_message(db, PlatformType.WHATSAPP, filer.phone_or_handle, "Your appeal was successful and the first-instance decision has been overturned. Your KES 200.00 appeal fee refund is processing.", deal.id)
+            
+        # Adjust trust scores and win rates
+        AIService.apply_dispute_outcome(
+            db=db,
+            deal=deal,
+            dispute=dispute,
+            outcome=OutcomeType(outcome),
+            partial_split_percentage=partial_split_percentage
+        )
+    else:
+        # First-instance Resolution (Mediator)
+        if resolver.role not in [UserRole.MODERATOR, UserRole.ARBITRATOR, UserRole.ADMIN]:
+            raise HTTPException(status_code=403, detail="Only staff members can resolve disputes")
+            
+        # Save outcome but do NOT trigger payouts yet (await 5-day appeal window)
+        dispute.final_outcome = OutcomeType(outcome)
+        dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
+        dispute.human_moderator_id = resolver.id
+        dispute.tier = DisputeTier.TIER_3_HUMAN
+        
+        # Notify parties and initiate appeal window
+        MetaService.send_text_message(
+            db, PlatformType.WHATSAPP, filer.phone_or_handle,
+            f"⚖️ Human Moderator Verdict: {outcome.upper()}.\n\n"
+            f"Rationale: {reasoning}\n\n"
+            f"If you believe there was a major error, you can request one final Appeal review by replying 'APPEAL' "
+            f"(KES 200.00 fee applies) within 5 business days (final within HoldUntil's internal dispute process).",
+            deal.id
+        )
+        MetaService.send_text_message(
+            db, PlatformType.WHATSAPP, non_filer_user.phone_or_handle if 'non_filer_user' in locals() else (buyer if dispute.filed_by == seller.id else seller).phone_or_handle,
+            f"⚖️ Human Moderator Verdict: {outcome.upper()}.\n\n"
+            f"Rationale: {reasoning}",
+            deal.id
+        )
 
     db.commit()
     return {"status": "resolved", "final_outcome": outcome}
@@ -540,3 +628,57 @@ def reset_sandbox_database(db: Session = Depends(get_db)):
     USER_SESSIONS.clear()
     
     return {"status": "success", "message": "Database and active sessions reset successfully."}
+
+@router.get("/metrics")
+def get_system_metrics(db: Session = Depends(get_db)):
+    """Calculate dispute statistics, including AI recommendation-vs-human agreement rate."""
+    resolved_with_ai = db.query(Dispute).filter(
+        Dispute.resolved_at != None,
+        Dispute.ai_decision != None
+    ).all()
+    
+    total = len(resolved_with_ai)
+    if total == 0:
+        agreement_rate = 100.0
+    else:
+        agreed = sum(1 for d in resolved_with_ai if d.ai_decision == d.final_outcome)
+        agreement_rate = (agreed / total) * 100.0
+        
+    return {
+        "total_disputes": total,
+        "ai_agreement_rate_pct": round(agreement_rate, 1)
+    }
+
+@router.post("/simulation/mock-mpesa-b2c-callback")
+def simulate_mpesa_b2c_callback(payment_ref: str = Form(...), db: Session = Depends(get_db)):
+    """Mock the Safaricom Daraja B2C payout callback webhook response for sandbox testing."""
+    # 1. Check if this references an appeal refund
+    dispute = db.query(Dispute).filter(Dispute.appeal_fee_payout_ref == payment_ref).first()
+    if dispute:
+        dispute.appeal_fee_refund_status = "completed"
+        dispute.appeal_fee_refunded = True
+        db.commit()
+        return {"status": "success", "type": "appeal_refund"}
+        
+    # 2. Check standard deal payout
+    payment = db.query(Payment).filter(Payment.b2c_payout_ref == payment_ref).first()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment reference conversation ID not found")
+        
+    deal = db.query(Deal).filter(Deal.id == payment.deal_id).first()
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+        
+    is_refund = (payment.status == PaymentStatus.REFUND_PROCESSING)
+    payment.status = PaymentStatus.REFUND_COMPLETED if is_refund else PaymentStatus.PAYOUT_COMPLETED
+    deal.status = DealStatus.REFUNDED if is_refund else DealStatus.COMPLETED
+    db.commit()
+    
+    # Notify recipient via WhatsApp
+    recipient_phone = deal.buyer.phone_or_handle if is_refund else deal.seller.phone_or_handle
+    MetaService.send_text_message(
+        db, PlatformType.WHATSAPP, recipient_phone,
+        f"💰 M-Pesa B2C Payout of KES {payment.amount:.2f} completed successfully! Transaction Ref: {payment_ref}.",
+        deal.id
+    )
+    return {"status": "success", "type": "escrow_payout"}

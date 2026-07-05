@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, UTC
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy.orm import Session
-from backend.app.models import Deal, DealStatus, Evidence, Dispute, DisputeTier, OutcomeType
+from backend.app.models import Deal, DealStatus, Evidence, Dispute, DisputeTier, OutcomeType, User
 from backend.app.services.daraja_service import DarajaService
 from backend.app.services.meta_service import MetaService
 from backend.app.services.ai_service import AIService
@@ -116,6 +116,53 @@ def run_tier_1_checks(db: Session):
             deal.status = DealStatus.COMPLETED
             AIService.apply_dispute_outcome(db, deal, dispute, OutcomeType.RELEASE)
             db.commit()
+
+    # Rule 3: Processing first-instance resolved disputes after appeal window
+    from backend.app.config import settings
+    # Sandbox uses 15 seconds, production uses 5 days
+    if settings.SIMULATION_MODE:
+        appeal_limit = now - timedelta(seconds=15)
+    else:
+        appeal_limit = now - timedelta(days=5)
+
+    pending_releases = db.query(Dispute).filter(
+        Dispute.resolved_at != None,
+        Dispute.resolved_at < appeal_limit,
+        Dispute.is_appeal == False,
+        Dispute.filer_satisfied == None
+    ).all()
+
+    for d in pending_releases:
+        # Check if the deal is still in DISPUTED status
+        deal = db.query(Deal).filter(Deal.id == d.deal_id, Deal.status == DealStatus.DISPUTED).first()
+        if deal:
+            logger.info(f"Appeal window expired for Dispute {d.id}. Executing payout for verdict: {d.final_outcome}")
+            
+            try:
+                seller = db.query(User).filter(User.id == deal.seller_id).first()
+                buyer = db.query(User).filter(User.id == deal.buyer_id).first()
+                
+                if d.final_outcome == OutcomeType.RELEASE:
+                    DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, deal.agreed_price, is_refund=False)
+                    MetaService.send_text_message(db, deal.seller.platform, seller.phone_or_handle, f"Escrow payment of KES {deal.agreed_price:.2f} is being released to you as the appeal window has expired.", deal.id)
+                    MetaService.send_text_message(db, deal.buyer.platform, buyer.phone_or_handle, f"Escrow payment released to seller. Rationale: Appeal window expired.", deal.id)
+                elif d.final_outcome == OutcomeType.REFUND:
+                    DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, deal.agreed_price, is_refund=True)
+                    MetaService.send_text_message(db, deal.buyer.platform, buyer.phone_or_handle, f"Escrow refund of KES {deal.agreed_price:.2f} is being processed to you as the appeal window has expired.", deal.id)
+                    MetaService.send_text_message(db, deal.seller.platform, seller.phone_or_handle, f"Escrow funds refunded to buyer. Rationale: Appeal window expired.", deal.id)
+                elif d.final_outcome == OutcomeType.PARTIAL_SPLIT:
+                    pct = d.partial_split_percentage or 50
+                    seller_amt = (pct / 100.0) * deal.agreed_price
+                    buyer_amt = deal.agreed_price - seller_amt
+                    DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, seller_amt, is_refund=False)
+                    DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, buyer_amt, is_refund=True)
+                    MetaService.send_text_message(db, deal.seller.platform, seller.phone_or_handle, f"Escrow split payment of KES {seller_amt:.2f} is being released to you as the appeal window has expired.", deal.id)
+                    MetaService.send_text_message(db, deal.buyer.platform, buyer.phone_or_handle, f"Escrow split refund of KES {buyer_amt:.2f} is being processed to you as the appeal window has expired.", deal.id)
+                
+                AIService.apply_dispute_outcome(db, deal, d, d.final_outcome, partial_split_percentage=d.partial_split_percentage)
+                db.commit()
+            except Exception as e:
+                logger.error(f"Failed B2C payout for Rule 3 dispute {d.id}: {e}")
 
 def start_scheduler(SessionLocalFactory):
     """Start APScheduler jobs."""
