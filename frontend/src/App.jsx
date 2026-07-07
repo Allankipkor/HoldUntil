@@ -361,6 +361,9 @@ export default function App() {
             }
           }
         }
+      } else {
+        console.warn("Server responded with error, falling back to simulator");
+        simulateOfflineResponse(msgText, roleLabel);
       }
     } catch (e) {
       // Offline fallback Dialogue engine simulator
