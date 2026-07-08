@@ -118,9 +118,26 @@ def dialogue_chat_simulator(
     )
 
     # Save Bot reply to chat logs so simulator can fetch it
-    # Note: ChatBotService already logs the reply if a deal is in context,
-    # but we will return it directly to the dashboard caller for instant rendering.
     session = USER_SESSIONS.get(phone_or_handle, {})
+    deal_id = session.get("deal_id")
+    if deal_id and bot_reply:
+        from datetime import datetime, UTC
+        from backend.app.models import ChatLog
+        from backend.app.services.meta_service import MetaService
+        
+        bot_id = MetaService._ensure_bot_user_exists(db)
+        
+        # Check if the last log is from the bot and matches content to avoid duplicates
+        last_log = db.query(ChatLog).filter(ChatLog.deal_id == deal_id).order_by(ChatLog.timestamp.desc()).first()
+        if not last_log or last_log.message_content != bot_reply:
+            chat_log = ChatLog(
+                deal_id=deal_id,
+                sender_id=bot_id,
+                message_content=bot_reply,
+                timestamp=datetime.now(UTC).replace(tzinfo=None)
+            )
+            db.add(chat_log)
+            db.commit()
     
     return {
         "user": phone_or_handle,
