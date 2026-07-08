@@ -35,7 +35,7 @@ def test_user_creation(db_session):
     assert user.role == UserRole.USER
 
 def test_deal_creation_dialogue_flow(db_session):
-    """Test the seller setup dialogue chain (SELL -> Desc -> Type -> Price -> Days)."""
+    """Test the seller setup dialogue chain (SELL -> Desc -> Price -> Days)."""
     seller_phone = "254711111111"
     
     # Step 1: Initialize
@@ -45,14 +45,9 @@ def test_deal_creation_dialogue_flow(db_session):
 
     # Step 2: Description
     r2 = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "HP Pavilion Laptop")
-    assert "transaction type" in r2.lower()
-    assert USER_SESSIONS[seller_phone]["state"] == "AWAITING_TYPE"
-    assert USER_SESSIONS[seller_phone]["draft_desc"] == "HP Pavilion Laptop"
-
-    # Step 2.5: Type
-    r_type = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "2")
-    assert "agreed price" in r_type.lower()
+    assert "agreed price" in r2.lower()
     assert USER_SESSIONS[seller_phone]["state"] == "AWAITING_PRICE"
+    assert USER_SESSIONS[seller_phone]["draft_desc"] == "HP Pavilion Laptop"
 
     # Step 3: Price
     r3 = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "KES 15000")
@@ -80,7 +75,6 @@ def test_buyer_join_and_confirm(db_session):
     # Setup deal first
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "SELL")
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "iPhone")
-    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "2") # Shipped Goods
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "45000")
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "2")
     
@@ -99,7 +93,22 @@ def test_buyer_join_and_confirm(db_session):
 
     # Buyer confirms terms
     confirm_reply = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, buyer_phone, "CONFIRM")
-    assert "m-pesa" in confirm_reply.lower() or "stk" in confirm_reply.lower()
+    assert "transaction type" in confirm_reply.lower()
+    
+    # Buyer selects Shipped Goods (2)
+    type_reply = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, buyer_phone, "2")
+    assert "waiting" in type_reply.lower()
+    
+    # Seller selects Sendy (1)
+    courier_reply = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "1")
+    assert "disclaimer" in courier_reply.lower()
+    
+    # Acknowledge disclaimer
+    ack_buyer = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, buyer_phone, "I ACKNOWLEDGE")
+    assert "waiting" in ack_buyer.lower() or "acknowledge" in ack_buyer.lower()
+    
+    ack_seller = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "I ACKNOWLEDGE")
+    assert "m-pesa" in ack_seller.lower() or "stk" in ack_seller.lower()
 
 def test_courier_tracking_plugin():
     """Verify courier APIs pluggable tracking number routing."""
@@ -151,7 +160,6 @@ def test_price_edit_and_cancel_commands(db_session):
     # 1. Create a draft deal
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "SELL")
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "iPhone 17 Pro")
-    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "2") # Shipped Goods
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "14,000")
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "3")
     
@@ -190,7 +198,6 @@ def test_dispute_resolution_and_trust_adjustment(db_session):
     # Run the setup flow to get an active funded deal
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "SELL")
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "Sony WH-1000XM5")
-    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "2") # Shipped Goods
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "30000")
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "3")
     
@@ -200,6 +207,11 @@ def test_dispute_resolution_and_trust_adjustment(db_session):
     # Buyer joins & confirms
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, buyer_phone, f"JOIN_{deal.id}")
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, buyer_phone, "CONFIRM")
+    # New flow post-confirm steps
+    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, buyer_phone, "2")
+    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "1")
+    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, buyer_phone, "I ACKNOWLEDGE")
+    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "I ACKNOWLEDGE")
     
     # Force payment confirmation to set status = FUNDED
     from backend.app.routes.dashboard import simulate_mpesa_payment
@@ -213,7 +225,7 @@ def test_dispute_resolution_and_trust_adjustment(db_session):
     
     # Seller ships (updates status = SHIPPED)
     from backend.app.routes.dashboard import upload_simulated_evidence
-    upload_simulated_evidence(deal_id=deal.id, sender_id=seller.id, photo_name="package_with_code.jpg", db=db_session)
+    upload_simulated_evidence(deal_id=deal.id, sender_id=seller.id, photo_name="package_with_code.jpg", in_app_captured=True, db=db_session)
     db_session.refresh(deal)
     assert deal.status == DealStatus.SHIPPED
     
@@ -290,3 +302,52 @@ def test_dispute_resolution_and_trust_adjustment(db_session):
     # Overturned appeal fee refund should be completed in simulation mode
     assert dispute.appeal_fee_refunded is True
     assert dispute.appeal_fee_refund_status == "completed"
+
+def test_in_app_evidence_enforcement_and_video_call(db_session):
+    """Test in-app camera verification enforcement and Type 4 video call logging."""
+    seller = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254711111111")
+    buyer = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254722222222")
+    
+    deal = Deal(
+        seller_id=seller.id,
+        buyer_id=buyer.id,
+        item_description="Remote Physical Repairs",
+        agreed_price=5000.0,
+        status=DealStatus.FUNDED,
+        transaction_type="remote_service"
+    )
+    db_session.add(deal)
+    db_session.commit()
+    
+    from fastapi import HTTPException
+    from backend.app.routes.dashboard import upload_simulated_evidence, log_simulated_video_call
+    from backend.app.models import Evidence
+    
+    # 1. Attempt upload-evidence from gallery (in_app_captured=False) -> should fail
+    with pytest.raises(HTTPException) as excinfo:
+        upload_simulated_evidence(
+            deal_id=deal.id,
+            sender_id=seller.id,
+            photo_name="repaired_wall.jpg",
+            in_app_captured=False,
+            db=db_session
+        )
+    assert excinfo.value.status_code == 400
+    assert "in-app camera" in excinfo.value.detail.lower()
+
+    # 2. Log Type 4 video call
+    res = log_simulated_video_call(
+        deal_id=deal.id,
+        sender_id=seller.id,
+        duration_seconds=120,
+        buyer_present=True,
+        db=db_session
+    )
+    assert res["status"] == "video_call_logged"
+    
+    # Verify evidence registered
+    ev = db_session.query(Evidence).filter(Evidence.deal_id == deal.id).first()
+    assert ev is not None
+    assert ev.in_app_captured is True
+    assert ev.video_call_log is not None
+    assert ev.video_call_log["duration_seconds"] == 120

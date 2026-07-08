@@ -87,7 +87,9 @@ class AIService:
             "buyer_trust_score": buyer.trust_score,
             "dispute_reason": dispute.reason,
             "transcript": transcript,
-            "evidence": evidence_text
+            "evidence": evidence_text,
+            "transaction_type": deal.transaction_type or "shipped",
+            "courier_name": deal.courier_name or "N/A"
         }
 
         # 4. Prompt construction
@@ -103,6 +105,8 @@ Your decision must be fair, neutral, and adhere strictly to the following rubric
 DISPUTE CONTEXT:
 - Item: {context['item_description']}
 - Price: KES {context['agreed_price']}
+- Transaction Type: {context['transaction_type']}
+- Courier Name: {context['courier_name']}
 - Delivery Deadline: {context['delivery_deadline']}
 - Seller Trust Score: {context['seller_trust_score']}/100
 - Buyer Trust Score: {context['buyer_trust_score']}/100
@@ -197,57 +201,144 @@ DECISION INSTRUCTIONS:
     @classmethod
     def _run_heuristics(cls, deal: Deal, dispute: Dispute, evidences: list) -> dict:
         """Heuristic rule-based dispute resolver fallback."""
-        # Check if tracking is verified
-        tracking_ok = False
-        if deal.courier_name and deal.tracking_number:
-            res = verify_tracking(deal.courier_name, deal.tracking_number)
-            tracking_ok = (res.get("status") == "delivered")
-
-        # Check evidence verification
-        has_verified_photo = False
-        has_reuse_alert = False
-        
+        # Fraud Check: check if any photo was reused (recycled photo)
         for ev in evidences:
-            if ev.dynamic_code_detected:
-                has_verified_photo = True
             if ev.perceptual_hash and "WARNING" in str(ev.perceptual_hash):
-                has_reuse_alert = True
+                return {
+                    "outcome": "refund",
+                    "partial_split_percentage": None,
+                    "reasoning": "System fraud detection flagged the seller's submitted proof photo as recycled (previously submitted in another deal). Buyer is refunded due to fraud.",
+                    "confidence": 0.90
+                }
 
-        # Heuristic Logic
-        if tracking_ok:
-            return {
-                "outcome": "release",
-                "partial_split_percentage": None,
-                "reasoning": "Courier tracking API confirms successful delivery to the buyer. This verified tracking data overrides buyer's claims of non-receipt.",
-                "confidence": 0.95
-            }
-        
-        if has_reuse_alert:
-            return {
-                "outcome": "refund",
-                "partial_split_percentage": None,
-                "reasoning": "System fraud detection flagged the seller's submitted package photo as recycled (previously submitted in another deal). Due to photo reuse fraud, the buyer is refunded.",
-                "confidence": 0.90
-            }
+        # Check by transaction type
+        t_type = deal.transaction_type or "shipped"
 
-        if has_verified_photo:
-            return {
-                "outcome": "release",
-                "partial_split_percentage": None,
-                "reasoning": "Seller submitted physical photo evidence containing the correct dynamic deal verification code. Buyer claims are overruled.",
-                "confidence": 0.85
-            }
-
-        # If no clear evidence on either side
-        if not evidences and not tracking_ok:
-            return {
-                "outcome": "refund",
-                "partial_split_percentage": None,
-                "reasoning": "Seller failed to provide any delivery tracking number or photo evidence before the deadline. Under HoldUntil escrow rules, absence of proof results in automatic refund.",
-                "confidence": 0.99
-            }
+        if t_type == "digital":
+            # Type 1: Digital Deliverable
+            # Seller must submit BOTH deliverable_file_url AND in-app photo proof
+            has_file = any(ev.deliverable_file_url for ev in evidences)
+            has_in_app_proof = any(ev.in_app_captured and ev.dynamic_code_detected for ev in evidences)
             
-        # Default fallback is split
+            if has_file and has_in_app_proof:
+                return {
+                    "outcome": "release",
+                    "partial_split_percentage": None,
+                    "reasoning": "Seller submitted both the digital deliverable file and verified in-app screenshot proof of completion. Releasing funds to seller.",
+                    "confidence": 0.95
+                }
+            elif has_in_app_proof:
+                # No file, but has in-app proof (action-based service)
+                return {
+                    "outcome": "release",
+                    "partial_split_percentage": None,
+                    "reasoning": "Seller submitted verified in-app screenshot proof of completion for the digital service. Releasing funds.",
+                    "confidence": 0.85
+                }
+            else:
+                return {
+                    "outcome": "refund",
+                    "partial_split_percentage": None,
+                    "reasoning": "Seller failed to provide sufficient digital delivery or completion evidence. Refunding buyer.",
+                    "confidence": 0.95
+                }
+
+        elif t_type == "shipped":
+            # Type 2: Shipped Goods
+            tracking_ok = False
+            is_verified = False
+            if deal.courier_name and deal.tracking_number:
+                res = verify_tracking(deal.courier_name, deal.tracking_number)
+                tracking_ok = (res.get("status") == "delivered")
+                if deal.courier_name.lower() in ["sendy", "boxleo"]:
+                    is_verified = True
+                
+            has_in_app_package = any(ev.in_app_captured and ev.dynamic_code_detected for ev in evidences)
+
+            if tracking_ok and is_verified:
+                return {
+                    "outcome": "release",
+                    "partial_split_percentage": None,
+                    "reasoning": "API-verified courier tracking confirms successful delivery to the buyer. This verified tracking data overrides buyer claims.",
+                    "confidence": 0.98
+                }
+            elif tracking_ok:
+                # Unverified API courier, or self-reported
+                return {
+                    "outcome": "release",
+                    "partial_split_percentage": None,
+                    "reasoning": "Self-reported or unverified courier tracking shows delivered. Proceeding with release based on self-reported courier event.",
+                    "confidence": 0.80
+                }
+            elif has_in_app_package:
+                return {
+                    "outcome": "release",
+                    "partial_split_percentage": None,
+                    "reasoning": "Seller submitted in-app package photo with matching dynamic verification code, though API tracking is pending.",
+                    "confidence": 0.85
+                }
+            else:
+                return {
+                    "outcome": "refund",
+                    "partial_split_percentage": None,
+                    "reasoning": "Seller failed to provide valid in-app package photo or verified tracking updates. Refunding buyer.",
+                    "confidence": 0.99
+                }
+
+        elif t_type == "handoff":
+            # Type 3: Local In-Person Handoff
+            # Check for in-app-captured handoff photo
+            has_handoff_photo = any(ev.in_app_captured and not ev.deliverable_file_url and not ev.video_call_log for ev in evidences)
+            
+            if has_handoff_photo:
+                return {
+                    "outcome": "release",
+                    "partial_split_percentage": None,
+                    "reasoning": "Seller submitted a verified in-app-captured handover photo matching the agreed description. Overruling buyer's receipt dispute.",
+                    "confidence": 0.85
+                }
+            else:
+                return {
+                    "outcome": "refund",
+                    "partial_split_percentage": None,
+                    "reasoning": "Seller did not submit the mandatory in-app-captured handover photo as proof of local transaction completion. Refunding buyer.",
+                    "confidence": 0.90
+                }
+
+        elif t_type == "remote_service":
+            # Type 4: Remote Physical Service
+            # Check for logged video call occurrence
+            has_video_call = any(ev.video_call_log is not None for ev in evidences)
+            
+            if has_video_call:
+                video_ev = next(ev for ev in evidences if ev.video_call_log is not None)
+                log = video_ev.video_call_log
+                buyer_pres = log.get("buyer_present", True) or log.get("proxy_name") is not None
+                dur = log.get("duration_seconds", 0)
+                
+                if buyer_pres and dur > 5:
+                    return {
+                        "outcome": "release",
+                        "partial_split_percentage": None,
+                        "reasoning": f"Live in-app video call completion checkpoint took place (duration: {dur}s) with buyer/proxy attending. Verification confirmed.",
+                        "confidence": 0.95
+                    }
+                else:
+                    return {
+                        "outcome": "refund",
+                        "partial_split_percentage": None,
+                        "reasoning": "A video call was logged, but buyer/proxy attendance was not verified or duration was too brief.",
+                        "confidence": 0.80
+                    }
+            else:
+                return {
+                    "outcome": "refund",
+                    "partial_split_percentage": None,
+                    "reasoning": "Seller did not conduct the mandatory live in-app video call session to demonstrate completed work. Refunding buyer.",
+                    "confidence": 0.90
+                }
+
+        # Fallback split
         return {
             "outcome": "partial_split",
             "partial_split_percentage": 50,

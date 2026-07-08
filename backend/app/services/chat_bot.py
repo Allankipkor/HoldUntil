@@ -224,34 +224,6 @@ class ChatBotService:
         state = session["state"]
         if state == "AWAITING_DESC":
             session["draft_desc"] = text
-            session["state"] = "AWAITING_TYPE"
-            return (
-                "What is the transaction type? Reply with the number:\n"
-                "1. Digital Deliverable\n"
-                "2. Shipped Goods (Courier)\n"
-                "3. Local In-Person Handoff\n"
-                "4. Remote Physical Service"
-            )
-
-        elif state == "AWAITING_TYPE":
-            val = normalized_text.strip()
-            from backend.app.models import DealType
-            if val == "1" or "digital" in val:
-                session["draft_type"] = DealType.DIGITAL
-            elif val == "2" or "shipped" in val:
-                session["draft_type"] = DealType.SHIPPED
-            elif val == "3" or "handoff" in val or "person" in val:
-                session["draft_type"] = DealType.HANDOFF
-            elif val == "4" or "remote" in val or "service" in val:
-                session["draft_type"] = DealType.REMOTE_SERVICE
-            else:
-                return (
-                    "Invalid choice. Please reply with a number 1 to 4:\n"
-                    "1. Digital Deliverable\n"
-                    "2. Shipped Goods (Courier)\n"
-                    "3. Local In-Person Handoff\n"
-                    "4. Remote Physical Service"
-                )
             session["state"] = "AWAITING_PRICE"
             return "Got it. What is the agreed price in Kenyan Shillings (KES)? (Numbers only, e.g. 15000)"
 
@@ -277,7 +249,7 @@ class ChatBotService:
                 seller_id=user.id,
                 item_description=session["draft_desc"],
                 agreed_price=session["draft_price"],
-                deal_type=session.get("draft_type", DealType.SHIPPED),
+                deal_type=DealType.SHIPPED, # Default placeholder
                 delivery_deadline=datetime.now(UTC).replace(tzinfo=None) + timedelta(days=days),
                 status=DealStatus.DRAFT,
                 seller_confirmed=True  # Seller created it, so they auto-confirm
@@ -304,6 +276,137 @@ class ChatBotService:
             )
             return response
 
+        elif state == "AWAITING_TRANSACTION_TYPE":
+            val = normalized_text.strip()
+            from backend.app.models import DealType
+            deal = db.query(Deal).filter(Deal.id == session["deal_id"]).first()
+            if not deal:
+                session["state"] = "IDLE"
+                return "Error: No active deal found."
+                
+            if val == "1" or "digital" in val.lower():
+                deal.transaction_type = "digital"
+                deal.deal_type = DealType.DIGITAL
+            elif val == "2" or "shipped" in val.lower():
+                deal.transaction_type = "shipped"
+                deal.deal_type = DealType.SHIPPED
+            elif val == "3" or "handoff" in val.lower() or "person" in val.lower():
+                deal.transaction_type = "handoff"
+                deal.deal_type = DealType.HANDOFF
+            elif val == "4" or "remote" in val.lower() or "service" in val.lower():
+                deal.transaction_type = "remote_service"
+                deal.deal_type = DealType.REMOTE_SERVICE
+            else:
+                return (
+                    "Invalid choice. Please reply with a number 1 to 4:\n"
+                    "1. Digital Deliverable\n"
+                    "2. Shipped Goods (Courier)\n"
+                    "3. Local In-Person Handoff\n"
+                    "4. Remote Physical Service"
+                )
+            db.commit()
+            
+            if deal.transaction_type == "shipped":
+                # Prompt seller for courier service configuration
+                USER_SESSIONS[deal.seller.phone_or_handle] = {
+                    "state": "AWAITING_COURIER_SELECTION",
+                    "deal_id": deal.id
+                }
+                MetaService.send_text_message(
+                    db, platform, deal.seller.phone_or_handle,
+                    "The buyer has selected Shipped Goods. Please specify the exact courier service being used. Reply with the number:\n"
+                    "1. Sendy\n"
+                    "2. G4S\n"
+                    "3. Boxleo\n"
+                    "4. Kenya Post\n"
+                    "5. Other",
+                    deal.id
+                )
+                session["state"] = "AWAITING_COURIER_CONFIG_BY_SELLER"
+                return "You selected Shipped Goods (Courier). Waiting for the seller to specify the courier service being used..."
+            else:
+                return cls._trigger_disclaimer_acknowledgements(db, platform, deal)
+
+        elif state == "AWAITING_COURIER_SELECTION":
+            val = normalized_text.strip()
+            deal = db.query(Deal).filter(Deal.id == session["deal_id"]).first()
+            if not deal:
+                session["state"] = "IDLE"
+                return "Error: No active deal found."
+                
+            couriers = {
+                "1": "Sendy",
+                "2": "G4S",
+                "3": "Boxleo",
+                "4": "Kenya Post"
+            }
+            if val in couriers:
+                deal.courier_name = couriers[val]
+                db.commit()
+                return cls._trigger_disclaimer_acknowledgements(db, platform, deal)
+            elif val == "5" or "other" in val.lower():
+                session["state"] = "AWAITING_MANUAL_COURIER"
+                return "Please enter the name of the courier service manually:"
+            else:
+                return (
+                    "Invalid choice. Please reply with the number:\n"
+                    "1. Sendy\n"
+                    "2. G4S\n"
+                    "3. Boxleo\n"
+                    "4. Kenya Post\n"
+                    "5. Other"
+                )
+
+        elif state == "AWAITING_MANUAL_COURIER":
+            deal = db.query(Deal).filter(Deal.id == session["deal_id"]).first()
+            if not deal:
+                session["state"] = "IDLE"
+                return "Error: No active deal found."
+            deal.courier_name = text.strip()
+            db.commit()
+            return cls._trigger_disclaimer_acknowledgements(db, platform, deal)
+
+        elif state == "AWAITING_DISCLAIMER_ACK":
+            deal = db.query(Deal).filter(Deal.id == session["deal_id"]).first()
+            if not deal:
+                session["state"] = "IDLE"
+                return "Error: No active deal found."
+                
+            if normalized_text == "I ACKNOWLEDGE":
+                if user.id == deal.seller_id:
+                    deal.seller_disclaimer_acknowledged = True
+                elif user.id == deal.buyer_id:
+                    deal.buyer_disclaimer_acknowledged = True
+                db.commit()
+                
+                # Check if both have acknowledged
+                if deal.seller_disclaimer_acknowledged and deal.buyer_disclaimer_acknowledged:
+                    buyer_user = db.query(User).filter(User.id == deal.buyer_id).first()
+                    
+                    deal.status = DealStatus.AWAITING_CONFIRMATION
+                    db.commit()
+                    
+                    USER_SESSIONS[deal.seller.phone_or_handle] = {"state": "IDLE", "deal_id": deal.id}
+                    USER_SESSIONS[deal.buyer.phone_or_handle] = {"state": "IDLE", "deal_id": deal.id}
+                    
+                    MetaService.send_text_message(
+                        db, platform, deal.seller.phone_or_handle,
+                        f"Deal '{deal.item_description[:30]}...' disclaimer acknowledged by both parties! "
+                        f"We are triggering the payment request to the buyer now.",
+                        deal.id
+                    )
+                    
+                    try:
+                        DarajaService.initiate_stk_push(db, deal, buyer_user.phone_or_handle)
+                        return "You have acknowledged the disclaimer. We have sent an M-Pesa STK Push to your phone. Please check your phone and enter your PIN to complete payment."
+                    except Exception as e:
+                        return f"Escrow setup failed due to M-Pesa connection error. Details: {str(e)}"
+                else:
+                    other_party = "Buyer" if user.id == deal.seller_id else "Seller"
+                    return f"Acknowledgement recorded! Waiting for the {other_party} to acknowledge the disclaimer."
+            else:
+                return "Please reply exactly 'I ACKNOWLEDGE' to agree to the disclaimer."
+
         # Deal confirmation & execution states
         if active_deal_id:
             deal = db.query(Deal).filter(Deal.id == active_deal_id).first()
@@ -318,27 +421,16 @@ class ChatBotService:
                         db.commit()
 
                         if deal.seller_confirmed and deal.buyer_confirmed:
-                            # Both confirmed! Trigger STK Push to buyer
-                            buyer_user = db.query(User).filter(User.id == deal.buyer_id).first()
+                            USER_SESSIONS[deal.seller.phone_or_handle] = {"state": "AWAITING_TRANSACTION_TYPE", "deal_id": deal.id}
+                            USER_SESSIONS[deal.buyer.phone_or_handle] = {"state": "AWAITING_TRANSACTION_TYPE", "deal_id": deal.id}
                             
-                            # Update status
-                            deal.status = DealStatus.AWAITING_CONFIRMATION
-                            db.commit()
-                            
-                            # Notify seller
-                            MetaService.send_text_message(
-                                db, platform, deal.seller.phone_or_handle,
-                                f"Deal '{deal.item_description[:30]}...' has been confirmed by both parties! "
-                                f"We are triggering the payment request to the buyer now.",
-                                deal.id
+                            return (
+                                "What is the transaction type? Reply with the number:\n"
+                                "1. Digital Deliverable\n"
+                                "2. Shipped Goods (Courier)\n"
+                                "3. Local In-Person Handoff\n"
+                                "4. Remote Physical Service"
                             )
-                            
-                            # Trigger STK push
-                            try:
-                                DarajaService.initiate_stk_push(db, deal, buyer_user.phone_or_handle)
-                                return "You have confirmed the deal. We have sent an M-Pesa STK Push to your phone. Please check your phone and enter your M-Pesa PIN to complete the escrow payment."
-                            except Exception as e:
-                                return f"Escrow setup failed due to M-Pesa connection error. Please try again later. Details: {str(e)}"
                         else:
                             other_party = "Buyer" if user.id == deal.seller_id else "Seller"
                             return f"You confirmed the deal! Waiting for the {other_party} to confirm."
@@ -366,7 +458,8 @@ class ChatBotService:
                         parts = text.split(" ", 1)
                         tracking = parts[1].strip() if len(parts) > 1 else ""
                         
-                        deal.courier_name = "Courier"  # default
+                        if not deal.courier_name:
+                            deal.courier_name = "Courier"
                         deal.tracking_number = tracking
                         deal.status = DealStatus.SHIPPED
                         db.commit()
@@ -548,3 +641,29 @@ class ChatBotService:
             f"• **YES** — Confirm you received the item (releases cash).\n"
             f"• **NO** — Dispute delivery (locks cash for moderator review)."
         )
+
+    @classmethod
+    def _trigger_disclaimer_acknowledgements(cls, db: Session, platform: PlatformType, deal: Deal) -> str:
+        disclaimer = (
+            "⚠️ IMPORTANT TRANSACTION DISCLAIMER ⚠️\n\n"
+            "Evidence submitted during this transaction (photos, videos, tracking info) may be used to resolve a dispute if one arises. "
+            "Please take evidence seriously and ensure it clearly and honestly reflects what actually happened — "
+            "false or misleading evidence affects your trust score and may be treated as fraud.\n\n"
+            "Reply 'I ACKNOWLEDGE' to agree and proceed."
+        )
+        
+        deal.seller_disclaimer_acknowledged = False
+        deal.buyer_disclaimer_acknowledged = False
+        db.commit()
+        
+        seller_phone = deal.seller.phone_or_handle
+        buyer_phone = deal.buyer.phone_or_handle
+        
+        USER_SESSIONS[seller_phone] = {"state": "AWAITING_DISCLAIMER_ACK", "deal_id": deal.id}
+        USER_SESSIONS[buyer_phone] = {"state": "AWAITING_DISCLAIMER_ACK", "deal_id": deal.id}
+        
+        MetaService.send_text_message(db, platform, seller_phone, disclaimer, deal.id)
+        if buyer_phone:
+            MetaService.send_text_message(db, platform, buyer_phone, disclaimer, deal.id)
+            
+        return disclaimer

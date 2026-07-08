@@ -89,6 +89,9 @@ class Deal(Base):
     seller_confirmed = Column(Boolean, default=False)
     buyer_confirmed = Column(Boolean, default=False)
     deal_type = Column(SQLEnum(DealType), default=DealType.SHIPPED, nullable=False)
+    transaction_type = Column(String(50), nullable=True)
+    seller_disclaimer_acknowledged = Column(Boolean, default=False, nullable=False)
+    buyer_disclaimer_acknowledged = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=utcnow)
 
     # Relationships
@@ -165,6 +168,12 @@ class Evidence(Base):
     exif_data = Column(JSON, nullable=True)
     dynamic_code_detected = Column(Boolean, default=False)
     courier_verified = Column(Boolean, default=False)
+    in_app_captured = Column(Boolean, default=False, nullable=False)
+    captured_timestamp = Column(DateTime, nullable=True)
+    gps_latitude = Column(Float, nullable=True)
+    gps_longitude = Column(Float, nullable=True)
+    deliverable_file_url = Column(String(500), nullable=True)
+    video_call_log = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=utcnow)
 
     # Relationships

@@ -517,13 +517,33 @@ def simulate_mpesa_payment(checkout_id: str = Form(...), db: Session = Depends(g
 def upload_simulated_evidence(
     deal_id: str = Form(...),
     sender_id: str = Form(...),
-    photo_name: str = Form(...), # e.g. "package_with_code.jpg" or "FAIL_CODE" to test code failure
+    photo_name: str = Form(None), # e.g. "package_with_code.jpg" or "FAIL_CODE" to test code failure
+    in_app_captured: bool = Form(False),
+    captured_timestamp: str = Form(None),
+    gps_latitude: float = Form(None),
+    gps_longitude: float = Form(None),
+    deliverable_file_url: str = Form(None),
     db: Session = Depends(get_db)
 ):
     """
     Simulate uploading photo evidence during a transaction.
     Computes hashes and EXIF data.
     """
+    # Sanitize Form default values if called directly as a python function (e.g. in tests)
+    from fastapi.params import Form as FormParam
+    if isinstance(photo_name, FormParam):
+        photo_name = None
+    if isinstance(in_app_captured, FormParam):
+        in_app_captured = False
+    if isinstance(captured_timestamp, FormParam):
+        captured_timestamp = None
+    if isinstance(gps_latitude, FormParam):
+        gps_latitude = None
+    if isinstance(gps_longitude, FormParam):
+        gps_longitude = None
+    if isinstance(deliverable_file_url, FormParam):
+        deliverable_file_url = None
+
     deal = db.query(Deal).filter(Deal.id == deal_id).first()
     if not deal:
         raise HTTPException(status_code=404, detail="Deal not found")
@@ -532,43 +552,63 @@ def upload_simulated_evidence(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Reject photo/video if not captured through the in-app camera/video feature
+    # Exception: digital deliverable file itself
+    if photo_name and not in_app_captured:
+        raise HTTPException(
+            status_code=400,
+            detail="Evidence rejected: photos and videos must be captured live using the in-app camera."
+        )
+
     # Generate mock perceptual hash and EXIF
-    # In simulation, we make a random unique hash but tag it if duplicate testing is needed
-    phash = f"hash_{uuid.uuid4().hex[:12]}"
-    if "REUSE" in photo_name.upper():
-        # Match an existing evidence hash if one exists, otherwise set a specific duplicate hash
-        existing = db.query(Evidence).first()
-        phash = existing.perceptual_hash if existing else "hash_duplicate_reused_12345"
+    phash = None
+    exif = None
+    if photo_name:
+        phash = f"hash_{uuid.uuid4().hex[:12]}"
+        if "REUSE" in photo_name.upper():
+            existing = db.query(Evidence).first()
+            phash = existing.perceptual_hash if existing else "hash_duplicate_reused_12345"
 
-    exif = {
-        "Make": "Apple",
-        "Model": "iPhone 13 Pro",
-        "DateTime": datetime.now(UTC).strftime("%Y:%m-%d %H:%M:%S"),
-        "Software": "iOS 16.2",
-        "GPSInfo": {"Latitude": -1.2921, "Longitude": 36.8219} # Nairobi GPS
-    }
+        exif = {
+            "Make": "Apple",
+            "Model": "iPhone 13 Pro",
+            "DateTime": datetime.now(UTC).strftime("%Y:%m-%d %H:%M:%S"),
+            "Software": "iOS 16.2",
+            "GPSInfo": {"Latitude": gps_latitude or -1.2921, "Longitude": gps_longitude or 36.8219}
+        }
 
-    # Custom triggers
-    if "EXIF_FAIL" in photo_name.upper():
-        exif = {} # missing EXIF
-    if "EXIF_FUTURE" in photo_name.upper():
-        exif["DateTime"] = "2028-10-10 12:00:00" # wrong timeline
+        # Custom triggers
+        if "EXIF_FAIL" in photo_name.upper():
+            exif = {}
+        if "EXIF_FUTURE" in photo_name.upper():
+            exif["DateTime"] = "2028-10-10 12:00:00"
 
     # Code matching
     code_verified = False
-    if deal.verification_code:
-        # If photo name indicates dynamic code mismatch, fail code verification
+    if photo_name and deal.verification_code:
         code_verified = ("FAIL_CODE" not in photo_name.upper())
+
+    parsed_timestamp = datetime.now(UTC).replace(tzinfo=None)
+    if captured_timestamp:
+        try:
+            parsed_timestamp = datetime.fromisoformat(captured_timestamp.replace("Z", "+00:00")).replace(tzinfo=None)
+        except Exception:
+            pass
 
     # Add evidence
     evidence = Evidence(
         deal_id=deal.id,
         submitted_by=user.id,
-        file_url=f"/simulated/media/{photo_name}",
+        file_url=f"/simulated/media/{photo_name}" if photo_name else (deliverable_file_url or ""),
         perceptual_hash=phash,
         exif_data=exif,
         dynamic_code_detected=code_verified,
-        courier_verified=False
+        courier_verified=False,
+        in_app_captured=in_app_captured,
+        captured_timestamp=parsed_timestamp,
+        gps_latitude=gps_latitude,
+        gps_longitude=gps_longitude,
+        deliverable_file_url=deliverable_file_url
     )
     db.add(evidence)
     
@@ -577,11 +617,12 @@ def upload_simulated_evidence(
     db.commit()
 
     # Log chat statement that evidence was uploaded
+    content_name = photo_name if photo_name else (deliverable_file_url.split("/")[-1] if deliverable_file_url else "file")
     chat_log = ChatLog(
         deal_id=deal.id,
         sender_id=user.id,
-        message_content=f"[Media Attachment Uploaded: {photo_name}]",
-        media_url=f"/simulated/media/{photo_name}",
+        message_content=f"[Media Attachment Uploaded: {content_name}]",
+        media_url=evidence.file_url,
         timestamp=datetime.now(UTC).replace(tzinfo=None)
     )
     db.add(chat_log)
@@ -590,12 +631,92 @@ def upload_simulated_evidence(
     # Prompt buyer
     MetaService.send_text_message(
         db, PlatformType.WHATSAPP, deal.buyer.phone_or_handle,
-        f"📦 The seller has uploaded photo proof of delivery: {photo_name}.\n\n"
+        f"📦 The seller has uploaded proof of completion/delivery: {content_name}.\n\n"
         f"Did you receive your item as described? Reply YES or NO",
         deal.id
     )
 
     return {"status": "evidence_uploaded", "evidence_id": evidence.id, "code_verified": code_verified}
+
+@router.post("/simulation/log-video-call")
+def log_simulated_video_call(
+    deal_id: str = Form(...),
+    sender_id: str = Form(...),
+    duration_seconds: int = Form(...),
+    buyer_present: bool = Form(True),
+    proxy_name: str = Form(None),
+    milestone_index: int = Form(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Simulate logging an in-app live video call as proof of completion (Remote Physical Service).
+    """
+    # Sanitize Form default values if called directly as a python function (e.g. in tests)
+    from fastapi.params import Form as FormParam
+    if isinstance(buyer_present, FormParam):
+        buyer_present = True
+    if isinstance(proxy_name, FormParam):
+        proxy_name = None
+    if isinstance(milestone_index, FormParam):
+        milestone_index = None
+
+    deal = db.query(Deal).filter(Deal.id == deal_id).first()
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    user = db.query(User).filter(User.id == sender_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    call_log = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "duration_seconds": duration_seconds,
+        "seller_id": deal.seller_id,
+        "buyer_id": deal.buyer_id,
+        "buyer_present": buyer_present,
+        "proxy_name": proxy_name,
+        "milestone_index": milestone_index
+    }
+
+    # Add video call evidence
+    evidence = Evidence(
+        deal_id=deal.id,
+        submitted_by=user.id,
+        file_url=f"/simulated/video_call_{milestone_index or 'final'}",
+        in_app_captured=True,
+        captured_timestamp=datetime.now(UTC).replace(tzinfo=None),
+        video_call_log=call_log
+    )
+    db.add(evidence)
+
+    # For Remote Service final verification, change status to SHIPPED (completed verification pending)
+    if milestone_index is None:
+        deal.status = DealStatus.SHIPPED
+        
+    db.commit()
+
+    # Log to chat
+    participant_str = "buyer" if buyer_present else f"proxy ({proxy_name})"
+    milestone_str = f" for Milestone #{milestone_index}" if milestone_index is not None else ""
+    chat_log = ChatLog(
+        deal_id=deal.id,
+        sender_id=user.id,
+        message_content=f"[Live Video Call Completed{milestone_str}: {duration_seconds}s, participant: {participant_str}]",
+        timestamp=datetime.now(UTC).replace(tzinfo=None)
+    )
+    db.add(chat_log)
+    db.commit()
+
+    # Prompt buyer
+    target_phone = deal.buyer.phone_or_handle
+    MetaService.send_text_message(
+        db, PlatformType.WHATSAPP, target_phone,
+        f"📹 A live video call session has been completed{milestone_str} as completion proof.\n\n"
+        f"Did you verify and accept the work? Reply YES or NO",
+        deal.id
+    )
+
+    return {"status": "video_call_logged", "evidence_id": evidence.id}
 
 @router.post("/simulation/revoke-message")
 def simulate_message_revocation(chat_log_id: str = Form(...), db: Session = Depends(get_db)):

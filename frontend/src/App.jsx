@@ -26,6 +26,11 @@ export default function App() {
   const [activeDealId, setActiveDealId] = useState(null);
   const [dealDetails, setDealDetails] = useState(null);
   const [sandboxLoading, setSandboxLoading] = useState(false);
+  const [evidenceTrackingNumber, setEvidenceTrackingNumber] = useState('SDY-9922');
+  const [videoCallDuration, setVideoCallDuration] = useState(30);
+  const [videoCallBuyerPresent, setVideoCallBuyerPresent] = useState(true);
+  const [videoCallProxyName, setVideoCallProxyName] = useState('');
+  const [videoCallMilestoneIndex, setVideoCallMilestoneIndex] = useState('');
   
   // Dashboard State
   const [disputes, setDisputes] = useState([]);
@@ -416,16 +421,30 @@ export default function App() {
       }));
       reply = `🤝 You are joining a secure HoldUntil escrow deal!\n\nSeller: 254711111111\nItem: HP Pavilion Laptop\nPrice: KES 15000.00\n\n📜 Consent Notice: Disputes will trigger moderator review of this transaction's transcripts.\n\nReply 'CONFIRM' to accept and trigger STK push payment.`;
     } else if (cleanMsg === "CONFIRM") {
+      reply = "What is the transaction type? Reply with the number:\n1. Digital Deliverable\n2. Shipped Goods (Courier)\n3. Local In-Person Handoff\n4. Remote Physical Service";
+    } else if (cleanMsg === "1" || cleanMsg === "2" || cleanMsg === "3" || cleanMsg === "4") {
+      const typeMap = { "1": "digital", "2": "shipped", "3": "handoff", "4": "remote_service" };
+      setDealDetails(prev => ({
+        ...prev,
+        deal: {
+          ...prev.deal,
+          transaction_type: typeMap[cleanMsg]
+        }
+      }));
+      reply = "⚠️ IMPORTANT TRANSACTION DISCLAIMER ⚠️\n\nEvidence submitted during this transaction (photos, videos, tracking info) may be used to resolve a dispute if one arises. Please take evidence seriously and ensure it clearly and honestly reflects what actually happened — false or misleading evidence affects your trust score and may be treated as fraud.\n\nReply 'I ACKNOWLEDGE' to agree and proceed.";
+    } else if (cleanMsg === "I ACKNOWLEDGE") {
       setDealDetails(prev => ({
         ...prev,
         deal: {
           ...prev.deal,
           buyer_confirmed: true,
           seller_confirmed: true,
-          status: "awaiting_confirmation"
+          status: "awaiting_confirmation",
+          seller_disclaimer_acknowledged: true,
+          buyer_disclaimer_acknowledged: true
         }
       }));
-      reply = "Deal confirmed. Triggering Safaricom M-Pesa STK Push... Use the payment simulator control below to execute.";
+      reply = "You have acknowledged the disclaimer. M-Pesa STK Push has been sent to your phone. Use the payment simulator below to execute.";
     } else if (cleanMsg === "YES") {
       setDealDetails(prev => ({
         ...prev,
@@ -505,13 +524,21 @@ export default function App() {
     }
   };
 
-  const handleSimulateUpload = async (photoType) => {
+  const handleSimulateUpload = async (photoType, options = {}) => {
     if (!dealDetails) return;
+    const inAppCaptured = options.inAppCaptured !== undefined ? options.inAppCaptured : true;
     try {
       const formData = new FormData();
       formData.append("deal_id", activeDealId);
       formData.append("sender_id", dealDetails.deal.seller_id || "usr_seller_1");
-      formData.append("photo_name", photoType); // "package_with_code" | "REUSE_ALERT" | "FAIL_CODE"
+      if (photoType) {
+        formData.append("photo_name", photoType);
+      }
+      formData.append("in_app_captured", inAppCaptured ? "true" : "false");
+      formData.append("captured_timestamp", new Date().toISOString());
+      if (options.gps_latitude) formData.append("gps_latitude", options.gps_latitude);
+      if (options.gps_longitude) formData.append("gps_longitude", options.gps_longitude);
+      if (options.deliverable_file_url) formData.append("deliverable_file_url", options.deliverable_file_url);
 
       const res = await fetch('/api/dashboard/simulation/upload-evidence', {
         method: 'POST',
@@ -520,22 +547,78 @@ export default function App() {
       if (res.ok) {
         alert("Evidence Upload simulated!");
         fetchDealDetails(activeDealId);
+      } else {
+        const errText = await res.text();
+        alert(`Failed to upload evidence: ${errText}`);
       }
     } catch (e) {
-      alert(`Evidence Uploaded (${photoType}) simulated offline.`);
+      alert(`Evidence Uploaded (${photoType || 'file'}) simulated offline.`);
       setDealDetails(prev => ({
         ...prev,
         deal: { ...prev.deal, status: "shipped" },
         evidences: [{
           submitted_by_handle: "Seller",
-          file_url: `/simulated/media/${photoType}`,
+          file_url: photoType ? `/simulated/media/${photoType}` : (options.deliverable_file_url || ""),
           dynamic_code_detected: photoType !== "FAIL_CODE",
           perceptual_hash: photoType === "REUSE_ALERT" ? "hash_duplicate_reused_12345" : "hash_unique_99",
-          courier_verified: false
+          courier_verified: false,
+          in_app_captured: inAppCaptured,
+          captured_timestamp: new Date().toISOString(),
+          gps_latitude: options.gps_latitude || null,
+          gps_longitude: options.gps_longitude || null,
+          deliverable_file_url: options.deliverable_file_url || null
         }]
       }));
       setChatLogs(prev => [...prev, 
-        { sender_handle: "Bot", message_content: `📦 Package marked as Shipped! Evidence file: ${photoType}. Prompting buyer.`, timestamp: new Date().toISOString() }
+        { sender_handle: "Bot", message_content: `📦 Proof submitted! File: ${photoType || options.deliverable_file_url}. Prompting buyer.`, timestamp: new Date().toISOString() }
+      ]);
+    }
+  };
+
+  const handleSimulateVideoCall = async (duration, buyerPresent, proxyName, milestoneIndex) => {
+    if (!dealDetails) return;
+    try {
+      const formData = new FormData();
+      formData.append("deal_id", activeDealId);
+      formData.append("sender_id", dealDetails.deal.seller_id || "usr_seller_1");
+      formData.append("duration_seconds", duration);
+      formData.append("buyer_present", buyerPresent ? "true" : "false");
+      if (proxyName) formData.append("proxy_name", proxyName);
+      if (milestoneIndex !== null && milestoneIndex !== undefined) {
+        formData.append("milestone_index", milestoneIndex);
+      }
+
+      const res = await fetch('/api/dashboard/simulation/log-video-call', {
+        method: 'POST',
+        body: formData
+      });
+      if (res.ok) {
+        alert("Video call logged successfully!");
+        fetchDealDetails(activeDealId);
+      } else {
+        const errText = await res.text();
+        alert(`Failed to log video call: ${errText}`);
+      }
+    } catch (e) {
+      alert("Video Call simulated offline.");
+      setDealDetails(prev => ({
+        ...prev,
+        deal: { ...prev.deal, status: milestoneIndex ? prev.deal.status : "shipped" },
+        evidences: [{
+          submitted_by_handle: "Seller",
+          file_url: `/simulated/video_call_${milestoneIndex || 'final'}`,
+          in_app_captured: true,
+          captured_timestamp: new Date().toISOString(),
+          video_call_log: {
+            duration_seconds: duration,
+            buyer_present: buyerPresent,
+            proxy_name: proxyName,
+            milestone_index: milestoneIndex
+          }
+        }]
+      }));
+      setChatLogs(prev => [...prev, 
+        { sender_handle: "Bot", message_content: `📹 Live Video Call session logged as completion proof.`, timestamp: new Date().toISOString() }
       ]);
     }
   };
@@ -740,21 +823,125 @@ export default function App() {
                 <button onClick={() => sendSandboxMessage(sellerPhone, 'SELL', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem' }}>
                   1. Setup Deal (SELL)
                 </button>
-                {dealDetails?.deal?.verification_code && dealDetails.deal.status === 'funded' && (
-                  <>
-                    <button onClick={() => handleSimulateUpload('package_with_code.jpg')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--primary)' }}>
-                      📷 Ship: Upload Package Photo (Pass)
-                    </button>
-                    <button onClick={() => handleSimulateUpload('FAIL_CODE')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-gold)' }}>
-                      📷 Ship: Upload Wrong Code Photo
-                    </button>
-                    <button onClick={() => handleSimulateUpload('REUSE_ALERT')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-red)' }}>
-                      📷 Ship: Reused Photo (Fraud Trigger)
-                    </button>
-                    <button onClick={() => sendSandboxMessage(sellerPhone, `SHIPPED SDY-9922`, 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem' }}>
-                      🚚 Ship: Sendy Tracking (SDY-9922)
-                    </button>
-                  </>
+                {dealDetails?.deal?.status === 'funded' && (
+                  <div style={{ border: '1px solid rgba(255,255,255,0.05)', padding: '10px', borderRadius: '8px', marginTop: '8px', background: 'rgba(255,255,255,0.01)' }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--primary)', fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>
+                      Evidence Completion Panel (Type: {dealDetails.deal.transaction_type || 'shipped'})
+                    </span>
+                    
+                    {/* TYPE 1: DIGITAL DELIVERABLE */}
+                    {dealDetails.deal.transaction_type === 'digital' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <button onClick={() => handleSimulateUpload(null, { deliverable_file_url: '/simulated/files/holduntil_code_v1.zip', inAppCaptured: false })} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--primary)' }}>
+                          📁 Upload Deliverable File (.zip)
+                        </button>
+                        <button onClick={() => handleSimulateUpload('screenshot_proof.jpg', { inAppCaptured: true })} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem' }}>
+                          📷 Upload Screenshot Proof (In-App Camera)
+                        </button>
+                        <button onClick={() => handleSimulateUpload('screenshot_proof.jpg', { inAppCaptured: false })} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-red)' }}>
+                          📷 Upload Screenshot (Device Gallery - Rejects)
+                        </button>
+                        <button onClick={() => handleSimulateUpload('FAIL_CODE', { inAppCaptured: true })} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-gold)' }}>
+                          📷 Screenshot Proof (Wrong Code)
+                        </button>
+                      </div>
+                    )}
+
+                    {/* TYPE 2: SHIPPED GOODS (COURIER) */}
+                    {(dealDetails.deal.transaction_type === 'shipped' || !dealDetails.deal.transaction_type) && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <div style={{ display: 'flex', gap: '4px', marginBottom: '4px' }}>
+                          <input 
+                            type="text" 
+                            value={evidenceTrackingNumber} 
+                            onChange={(e) => setEvidenceTrackingNumber(e.target.value)} 
+                            placeholder="Tracking Number" 
+                            className="form-input" 
+                            style={{ fontSize: '0.75rem', padding: '4px', background: 'rgba(0,0,0,0.2)', color: 'white', border: '1px solid var(--border-muted)' }}
+                          />
+                          <button onClick={() => sendSandboxMessage(sellerPhone, `SHIPPED ${evidenceTrackingNumber}`, 'Seller')} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '0.75rem' }}>
+                            Update Tracking
+                          </button>
+                        </div>
+                        <button onClick={() => handleSimulateUpload('package_with_code.jpg', { inAppCaptured: true })} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--primary)' }}>
+                          📷 Upload Package Photo (In-App Camera)
+                        </button>
+                        <button onClick={() => handleSimulateUpload('package_with_code.jpg', { inAppCaptured: false })} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-red)' }}>
+                          📷 Upload Package Photo (Device Gallery - Rejects)
+                        </button>
+                        <button onClick={() => handleSimulateUpload('FAIL_CODE', { inAppCaptured: true })} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-gold)' }}>
+                          📷 Package Photo (Wrong Code)
+                        </button>
+                        <button onClick={() => handleSimulateUpload('REUSE_ALERT', { inAppCaptured: true })} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-red)' }}>
+                          📷 Package Photo (Reused - Recycled Fraud)
+                        </button>
+                      </div>
+                    )}
+
+                    {/* TYPE 3: LOCAL IN-PERSON HANDOFF */}
+                    {dealDetails.deal.transaction_type === 'handoff' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <button onClick={() => handleSimulateUpload('handover_proof.jpg', { inAppCaptured: true, gps_latitude: -1.2921, gps_longitude: 36.8219 })} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--primary)' }}>
+                          📷 Upload Handover Photo (In-App + GPS Location)
+                        </button>
+                        <button onClick={() => handleSimulateUpload('handover_proof.jpg', { inAppCaptured: true })} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem' }}>
+                          📷 Upload Handover Photo (In-App Only)
+                        </button>
+                        <button onClick={() => handleSimulateUpload('handover_proof.jpg', { inAppCaptured: false })} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-red)' }}>
+                          📷 Handover Photo (Device Gallery - Rejects)
+                        </button>
+                      </div>
+                    )}
+
+                    {/* TYPE 4: REMOTE PHYSICAL SERVICE */}
+                    {dealDetails.deal.transaction_type === 'remote_service' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '4px', margin: '4px 0' }}>
+                            <input 
+                              type="checkbox" 
+                              checked={videoCallBuyerPresent} 
+                              onChange={(e) => setVideoCallBuyerPresent(e.target.checked)}
+                            /> Buyer Attending in Real-Time
+                          </label>
+                          {!videoCallBuyerPresent && (
+                            <input 
+                              type="text" 
+                              value={videoCallProxyName} 
+                              onChange={(e) => setVideoCallProxyName(e.target.value)} 
+                              placeholder="Nominated Proxy Name" 
+                              className="form-input" 
+                              style={{ fontSize: '0.75rem', padding: '4px', marginBottom: '4px', background: 'rgba(0,0,0,0.2)', color: 'white', border: '1px solid var(--border-muted)' }}
+                            />
+                          )}
+                          <input 
+                            type="text" 
+                            value={videoCallMilestoneIndex} 
+                            onChange={(e) => setVideoCallMilestoneIndex(e.target.value)} 
+                            placeholder="Milestone Index (leave blank if final)" 
+                            className="form-input" 
+                            style={{ fontSize: '0.75rem', padding: '4px', marginBottom: '4px', background: 'rgba(0,0,0,0.2)', color: 'white', border: '1px solid var(--border-muted)' }}
+                          />
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                            <span>Duration:</span>
+                            <input 
+                              type="number" 
+                              value={videoCallDuration} 
+                              onChange={(e) => setVideoCallDuration(parseInt(e.target.value) || 30)} 
+                              style={{ width: '60px', padding: '2px', fontSize: '0.75rem', background: 'rgba(0,0,0,0.2)', color: 'white', border: '1px solid var(--border-muted)' }}
+                            />s
+                          </div>
+                        </div>
+                        <button 
+                          onClick={() => handleSimulateVideoCall(videoCallDuration, videoCallBuyerPresent, videoCallProxyName || null, videoCallMilestoneIndex ? parseInt(videoCallMilestoneIndex) : null)} 
+                          className="btn btn-secondary" 
+                          style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--primary)' }}
+                        >
+                          📹 Initiate live in-app video call (Log proof)
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
