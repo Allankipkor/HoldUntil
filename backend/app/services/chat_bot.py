@@ -11,6 +11,7 @@ logger = logging.getLogger("chat_bot")
 
 # In-memory session tracking mapping phone_or_handle -> session dict
 USER_SESSIONS = {}
+CLOSED_DEAL_SESSIONS = set()
 
 class ChatBotService:
     @staticmethod
@@ -41,6 +42,12 @@ class ChatBotService:
         # Log incoming message to the database
         active_deal_id = session.get("deal_id")
         
+        # If the active deal in the session is already marked closed, clear it
+        if active_deal_id in CLOSED_DEAL_SESSIONS:
+            session["deal_id"] = None
+            session["state"] = "IDLE"
+            active_deal_id = None
+
         # If no active deal in session, try to find the user's latest active deal from DB
         if not active_deal_id:
             latest_deal = db.query(Deal).filter(
@@ -49,6 +56,13 @@ class ChatBotService:
             if latest_deal and latest_deal.status not in [DealStatus.COMPLETED, DealStatus.REFUNDED, DealStatus.CANCELLED]:
                 active_deal_id = latest_deal.id
                 session["deal_id"] = active_deal_id
+        
+        # Guard for no active deal and not in setup/global commands
+        is_in_setup = session.get("state") in ["AWAITING_DESC", "AWAITING_PRICE", "AWAITING_TIMELINE"]
+        is_global_cmd = normalized_text in ["SELL", "HELP"] or normalized_text.startswith("JOIN_")
+        
+        if not active_deal_id and not is_in_setup and not is_global_cmd:
+            return "You don't have an active deal right now. Message 'SELL' to start one, or share/enter a JOIN code to join someone else's deal."
         
         if active_deal_id:
             chat_log = ChatLog(
@@ -81,6 +95,7 @@ class ChatBotService:
                 if deal and deal.status in [DealStatus.DRAFT, DealStatus.AWAITING_CONFIRMATION]:
                     deal.status = DealStatus.CANCELLED
                     db.commit()
+                    CLOSED_DEAL_SESSIONS.add(deal.id)
             session["deal_id"] = None
             return "Dialogue reset. Active draft deal cancelled. Type 'SELL' to start a new transaction."
 
@@ -94,6 +109,7 @@ class ChatBotService:
                 # Update status immediately
                 deal.status = DealStatus.CANCELLED
                 db.commit()
+                CLOSED_DEAL_SESSIONS.add(deal.id)
                 
                 if is_buyer_cancel:
                     net_refund = deal.agreed_price - fee
@@ -497,6 +513,7 @@ class ChatBotService:
                     elif normalized_text == "REJECT":
                         deal.status = DealStatus.CANCELLED
                         db.commit()
+                        CLOSED_DEAL_SESSIONS.add(deal.id)
                         
                         # Notify other party
                         other_phone = deal.buyer.phone_or_handle if user.id == deal.seller_id else deal.seller.phone_or_handle

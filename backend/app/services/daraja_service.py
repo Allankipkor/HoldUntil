@@ -168,6 +168,9 @@ class DarajaService:
             deal.status = DealStatus.REFUNDED if is_refund else DealStatus.COMPLETED
             db.commit()
             logger.info(f"[SIMULATION SYNC] Mock B2C payout completed for Deal {deal.id}, ref: {conv_id}, amount: {payout_amount}")
+            
+            from backend.app.services.rating_service import RatingService
+            RatingService.trigger_post_deal_rating(db, deal)
             return
 
     @classmethod
@@ -204,7 +207,13 @@ class DarajaService:
             db.commit()
 
             if settings.SIMULATION_MODE:
-                logger.info(f"[SIMULATION] Mock B2C payout initialized for Deal {deal.id}, ref: {conv_id}, amount: {payout_amount}")
+                payment.status = PaymentStatus.REFUND_COMPLETED if is_refund else PaymentStatus.PAYOUT_COMPLETED
+                deal.status = DealStatus.REFUNDED if is_refund else DealStatus.COMPLETED
+                db.commit()
+                logger.info(f"[SIMULATION] Mock B2C payout completed for Deal {deal.id}, ref: {conv_id}, amount: {payout_amount}")
+                
+                from backend.app.services.rating_service import RatingService
+                RatingService.trigger_post_deal_rating(db, deal)
                 return
 
             # Production Daraja call

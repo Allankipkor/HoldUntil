@@ -3,7 +3,7 @@ from datetime import datetime, UTC, timedelta
 from sqlalchemy.orm import Session
 from backend.app.models import Deal, Dispute, DisputeTier, ResolutionMethod, Rating, RatingSource, User, PlatformType, DealStatus
 from backend.app.services.meta_service import MetaService
-from backend.app.services.chat_bot import USER_SESSIONS
+from backend.app.services.chat_bot import USER_SESSIONS, CLOSED_DEAL_SESSIONS
 
 logger = logging.getLogger("rating_service")
 
@@ -29,9 +29,8 @@ class RatingService:
             
         # Path 3: Moderator/Arbitrator resolved disputes
         elif dispute.resolution_method in [ResolutionMethod.HUMAN_FIRST_INSTANCE, ResolutionMethod.APPEAL]:
-            logger.info(f"Deal {deal.id} resolved by staff. Automatic rating-equivalent signals handled silently.")
-            # Automatic signals logged under AIService.apply_dispute_outcome
-            pass
+            logger.info(f"Deal {deal.id} resolved by staff. Automatic rating-equivalent signals handled silently. Closing deal session.")
+            CLOSED_DEAL_SESSIONS.add(deal.id)
 
     @classmethod
     def _initiate_manual_rating_flow(cls, db: Session, deal: Deal):
@@ -75,6 +74,9 @@ class RatingService:
             
         rating.is_applied = True
         db.commit()
+        
+        CLOSED_DEAL_SESSIONS.add(rating.deal_id)
+        logger.info(f"Deal {rating.deal_id} marked as closed after manual rating applied.")
 
     @classmethod
     def close_pending_ratings(cls, db: Session):
