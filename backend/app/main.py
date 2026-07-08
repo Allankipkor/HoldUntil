@@ -117,9 +117,31 @@ def dialogue_chat_simulator(
         media_url=media_url
     )
 
-    # Save Bot reply to chat logs so simulator can fetch it
-    session = USER_SESSIONS.get(phone_or_handle, {})
-    deal_id = session.get("deal_id")
+    # Capture deal ID before running the state machine
+    session_before = USER_SESSIONS.get(phone_or_handle, {})
+    deal_id = session_before.get("deal_id")
+    if not deal_id:
+        user_db = db.query(User).filter(User.phone_or_handle == phone_or_handle).first()
+        if user_db:
+            latest_deal = db.query(Deal).filter(
+                (Deal.seller_id == user_db.id) | (Deal.buyer_id == user_db.id)
+            ).order_by(Deal.created_at.desc()).first()
+            if latest_deal and latest_deal.status not in [DealStatus.COMPLETED, DealStatus.REFUNDED, DealStatus.CANCELLED]:
+                deal_id = latest_deal.id
+
+    bot_reply = ChatBotService.process_message(
+        db=db,
+        platform=plat_enum,
+        phone_or_handle=phone_or_handle,
+        text=message,
+        media_url=media_url
+    )
+
+    # If still not found, check if process_message just created/linked a new deal
+    if not deal_id:
+        deal_id = USER_SESSIONS.get(phone_or_handle, {}).get("deal_id")
+
+    # Save Bot reply to chat logs using the computed deal_id
     if deal_id and bot_reply:
         from datetime import datetime, UTC
         from backend.app.models import ChatLog
@@ -143,6 +165,6 @@ def dialogue_chat_simulator(
         "user": phone_or_handle,
         "message": message,
         "reply": bot_reply,
-        "session_state": session.get("state"),
-        "deal_id": session.get("deal_id")
+        "session_state": USER_SESSIONS.get(phone_or_handle, {}).get("state"),
+        "deal_id": USER_SESSIONS.get(phone_or_handle, {}).get("deal_id")
     }

@@ -89,6 +89,21 @@ async def receive_meta_message(request: Request, db: Session = Depends(get_db)):
                     media_url = f"https://mock-meta-cdn.sokosafi/media/{msg.get('document', {}).get('id')}"
 
                 if text_content or media_url:
+                    # Capture active deal ID before running state machine resets it
+                    from backend.app.services.chat_bot import USER_SESSIONS
+                    from backend.app.models import User, Deal, DealStatus
+                    
+                    session_before = USER_SESSIONS.get(sender, {})
+                    deal_id = session_before.get("deal_id")
+                    if not deal_id:
+                        user_db = db.query(User).filter(User.phone_or_handle == sender).first()
+                        if user_db:
+                            latest_deal = db.query(Deal).filter(
+                                (Deal.seller_id == user_db.id) | (Deal.buyer_id == user_db.id)
+                            ).order_by(Deal.created_at.desc()).first()
+                            if latest_deal and latest_deal.status not in [DealStatus.COMPLETED, DealStatus.REFUNDED, DealStatus.CANCELLED]:
+                                deal_id = latest_deal.id
+
                     # Run dialogue state machine
                     bot_reply = ChatBotService.process_message(
                         db=db,
@@ -98,13 +113,17 @@ async def receive_meta_message(request: Request, db: Session = Depends(get_db)):
                         media_url=media_url
                     )
                     
-                    # Dispatch bot reply back to user
+                    # If still not found, check if process_message just created/linked a new deal
+                    if not deal_id:
+                        deal_id = USER_SESSIONS.get(sender, {}).get("deal_id")
+                    
+                    # Dispatch bot reply back to user using the computed deal_id
                     MetaService.send_text_message(
                         db=db,
                         platform=platform,
                         recipient=sender,
                         text=bot_reply,
-                        deal_id=USER_SESSIONS.get(sender, {}).get("deal_id")
+                        deal_id=deal_id
                     )
 
             # Check for status updates (sent, delivered, read, deleted)
