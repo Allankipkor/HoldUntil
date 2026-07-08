@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     ESCROW_FEE_PERCENT: float = 1.5  # 1.5% fee
     DEFAULT_TRUST_SCORE: float = 100.0
     MIN_DEALS_FOR_BADGE: int = 10
+    MIN_TRADES_FOR_PROFILE_STATS: int = 3
     ESCALATION_LIMIT_PER_USER_PER_MONTH: int = 2
     ESCALATION_FEE_KES: float = 200.0  # escalation fee (refundable on overturn)
     DELIVERY_GRACE_PERIOD_HOURS: int = 48  # time buyer has to confirm delivery

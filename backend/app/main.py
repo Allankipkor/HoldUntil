@@ -168,3 +168,20 @@ def dialogue_chat_simulator(
         "session_state": USER_SESSIONS.get(phone_or_handle, {}).get("state"),
         "deal_id": USER_SESSIONS.get(phone_or_handle, {}).get("deal_id")
     }
+
+@app.get("/api/users/{user_identifier}/profile")
+def get_user_public_profile(user_identifier: str, db: Session = Depends(get_db)):
+    """
+    Expose public profile details (handle, stats, badge) by user ID or phone/handle.
+    """
+    from backend.app.services.rating_service import RatingService
+    
+    user = db.query(User).filter(User.id == user_identifier).first()
+    if not user:
+        user = db.query(User).filter(User.phone_or_handle == user_identifier).first()
+        
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    summary = RatingService.get_profile_summary(db, user)
+    return summary

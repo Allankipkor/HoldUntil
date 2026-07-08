@@ -643,6 +643,20 @@ class ChatBotService:
         if not deal:
             return "Invalid invitation link or deal code."
         
+        seller = db.query(User).filter(User.id == deal.seller_id).first()
+        if not seller:
+            return "Seller not found for this deal."
+            
+        from backend.app.services.rating_service import RatingService
+        
+        # Get seller's profile summary for the buyer
+        seller_summary = RatingService.get_profile_summary(db, seller)
+        if seller_summary["is_new_trader"]:
+            seller_intro = f"You're about to deal with Seller {seller.phone_or_handle}, a New Trader."
+        else:
+            badge_tag = " [PRO]" if seller_summary["has_badge"] else ""
+            seller_intro = f"You're about to deal with Seller {seller.phone_or_handle}{badge_tag}, who has completed {seller_summary['completed_trades']} trades at {seller_summary['positive_rate']:.2f}% positive rating."
+        
         if deal.status != DealStatus.DRAFT:
             if deal.buyer_id == user.id:
                 session["deal_id"] = deal.id
@@ -676,11 +690,11 @@ class ChatBotService:
                         return "This deal is funded and active. Please wait or proceed with the delivery."
                 else:
                     session["state"] = "IDLE"
-                    seller = db.query(User).filter(User.id == deal.seller_id).first()
                     seller_session = USER_SESSIONS.setdefault(seller.phone_or_handle, {"state": "IDLE", "deal_id": None})
                     seller_session["deal_id"] = deal.id
                     
                     response = (
+                        f"{seller_intro}\n\n"
                         f"🤝 You are joining a secure HoldUntil escrow deal!\n\n"
                         f"Seller: {seller.phone_or_handle}\n"
                         f"Item: {deal.item_description}\n"
@@ -709,12 +723,12 @@ class ChatBotService:
         session["state"] = "IDLE"
         
         # Set seller session active deal
-        seller = db.query(User).filter(User.id == deal.seller_id).first()
         seller_session = USER_SESSIONS.setdefault(seller.phone_or_handle, {"state": "IDLE", "deal_id": None})
         seller_session["deal_id"] = deal.id
 
         # Send details to buyer
         response = (
+            f"{seller_intro}\n\n"
             f"🤝 You are joining a secure HoldUntil escrow deal!\n\n"
             f"Seller: {seller.phone_or_handle}\n"
             f"Item: {deal.item_description}\n"
@@ -729,10 +743,18 @@ class ChatBotService:
             f"Reply 'REJECT' to decline."
         )
 
+        # Get buyer's profile summary for the seller notification
+        buyer_summary = RatingService.get_profile_summary(db, user)
+        if buyer_summary["is_new_trader"]:
+            buyer_intro = f"Buyer {user.phone_or_handle} is a New Trader."
+        else:
+            badge_tag = " [PRO]" if buyer_summary["has_badge"] else ""
+            buyer_intro = f"Buyer {user.phone_or_handle}{badge_tag} has completed {buyer_summary['completed_trades']} trades at {buyer_summary['positive_rate']:.2f}% positive rating."
+
         # Notify Seller
         MetaService.send_text_message(
             db, PlatformType.WHATSAPP, seller.phone_or_handle,
-            f"Buyer {user.phone_or_handle} has joined the deal! Awaiting buyer's confirmation.",
+            f"Buyer {user.phone_or_handle} has joined the deal! {buyer_intro} Awaiting buyer's confirmation.",
             deal.id
         )
 

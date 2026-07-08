@@ -53,6 +53,11 @@ export default function App() {
   // Admin State
   const [users, setUsers] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
+  const [systemSettings, setSystemSettings] = useState({
+    MIN_TRADES_FOR_PROFILE_STATS: 3,
+    MIN_DEALS_FOR_BADGE: 10
+  });
+  const [settingsLoading, setSettingsLoading] = useState(false);
 
   // Poll chat logs periodically when in sandbox deal
   useEffect(() => {
@@ -70,6 +75,7 @@ export default function App() {
       fetchMetrics();
     } else if (activeTab === 'admin') {
       fetchUsers();
+      fetchSettings();
     }
   }, [activeTab]);
 
@@ -141,6 +147,44 @@ export default function App() {
     }
   };
 
+  const fetchSettings = async () => {
+    setSettingsLoading(true);
+    try {
+      const res = await fetch('/api/dashboard/settings');
+      if (res.ok) {
+        const data = await res.json();
+        setSystemSettings(data);
+      }
+    } catch (e) {
+      console.warn("Failed to fetch settings from API.");
+    } finally {
+      setSettingsLoading(false);
+    }
+  };
+
+  const handleUpdateSettings = async (e) => {
+    e.preventDefault();
+    try {
+      const formData = new FormData();
+      formData.append("min_trades", systemSettings.MIN_TRADES_FOR_PROFILE_STATS);
+      formData.append("min_deals_for_badge", systemSettings.MIN_DEALS_FOR_BADGE);
+      
+      const res = await fetch('/api/dashboard/settings', {
+        method: 'POST',
+        body: formData
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSystemSettings(data.settings);
+        alert("Escrow configuration updated successfully!");
+      } else {
+        alert("Failed to update escrow configuration.");
+      }
+    } catch (err) {
+      alert("Error updating escrow configuration.");
+    }
+  };
+
   const handleVerifySeller = async (e) => {
     e.preventDefault();
     if (!searchSellerId) return;
@@ -149,29 +193,29 @@ export default function App() {
     setSellerVerifyResult(null);
 
     try {
-      const res = await fetch(`/api/dashboard/verify/${searchSellerId}`);
+      const res = await fetch(`/api/users/${searchSellerId}/profile`);
       if (res.ok) {
         const data = await res.json();
         setSellerVerifyResult(data);
       } else {
-        setVerifyError("Seller ID not found. Verify you entered the complete ID.");
+        setVerifyError("User profile not found. Verify you entered the complete ID or handle.");
       }
     } catch (err) {
       console.warn("Offline verification simulation.");
       // Fallback
       if (searchSellerId.length > 5) {
         setSellerVerifyResult({
-          id: searchSellerId,
-          phone_or_handle: "254711111111",
-          trust_score: 95.5,
-          completed_deals: 18,
-          dispute_rate_pct: 5.5,
-          ai_overturn_count: 0,
+          phone_or_handle: searchSellerId,
+          is_new_trader: false,
           has_badge: true,
-          member_since: "2026-02-14T08:00:00Z"
+          completed_trades: 18,
+          completion_rate: 97.06,
+          positive_rate: 100.0,
+          trust_score: 98.0,
+          display_text: `${searchSellerId} [PRO]\nTrades: 18 Trades (97.06%) | 👍 100.00%`
         });
       } else {
-        setVerifyError("Seller not found. Try entering a mock ID: 'usr_seller_1'");
+        setVerifyError("User not found. Try entering a mock handle: '254711111111'");
       }
     } finally {
       setVerifyLoading(false);
@@ -707,43 +751,96 @@ export default function App() {
 
               {sellerVerifyResult && (
                 <div style={{ borderTop: '1px solid var(--border-muted)', paddingTop: '24px', textAlign: 'left' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                    <h3 style={{ fontSize: '1.15rem' }}>Seller: {sellerVerifyResult.phone_or_handle}</h3>
-                    {sellerVerifyResult.has_badge ? (
-                      <span className="status-badge status-completed" style={{ gap: '4px' }}>
-                        <Award size={12} /> Verified Safe
+                  
+                  {/* Handle & Badge Header */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
+                    <h3 style={{ fontSize: '1.25rem', margin: 0, fontWeight: 'bold' }}>
+                      {sellerVerifyResult.phone_or_handle}
+                    </h3>
+                    {sellerVerifyResult.has_badge && (
+                      <span style={{ 
+                        fontSize: '0.75rem', 
+                        fontWeight: 'bold', 
+                        background: 'rgba(6,182,212,0.15)', 
+                        color: 'var(--primary)', 
+                        padding: '2px 8px', 
+                        borderRadius: '4px',
+                        border: '1px solid rgba(6,182,212,0.3)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px'
+                      }}>
+                        🔶 PRO
+                      </span>
+                    )}
+                    {sellerVerifyResult.is_new_trader ? (
+                      <span className="status-badge status-draft" style={{ fontSize: '0.75rem' }}>
+                        New Trader
                       </span>
                     ) : (
-                      <span className="status-badge status-draft">Standard Tier</span>
+                      <span className="status-badge status-completed" style={{ fontSize: '0.75rem' }}>
+                        Active Merchant
+                      </span>
                     )}
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
-                    <div style={{ background: 'var(--bg-panel)', padding: '12px', borderRadius: '8px' }}>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Trust Score</span>
-                      <p style={{ fontSize: '1.25rem', fontWeight: 'bold', color: sellerVerifyResult.trust_score >= 90 ? 'var(--primary)' : 'var(--accent-gold)' }}>
-                        {sellerVerifyResult.trust_score}%
+                  {/* Profile Body */}
+                  {sellerVerifyResult.is_new_trader ? (
+                    <div style={{ 
+                      background: 'rgba(255,255,255,0.02)', 
+                      border: '1px solid var(--border-muted)', 
+                      padding: '16px', 
+                      borderRadius: '8px', 
+                      marginBottom: '16px' 
+                    }}>
+                      <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0 }}>
+                        👤 <b>{sellerVerifyResult.phone_or_handle} · New Trader</b>
+                      </p>
+                      <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '8px 0 0 0' }}>
+                        This user is a New Trader with {sellerVerifyResult.completed_trades} completed trade(s). Full statistics and completion rates are hidden until they cross the minimum volume threshold.
                       </p>
                     </div>
-                    <div style={{ background: 'var(--bg-panel)', padding: '12px', borderRadius: '8px' }}>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Completed Deals</span>
-                      <p style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>{sellerVerifyResult.completed_deals}</p>
-                    </div>
-                  </div>
-
-                  {sellerVerifyResult.has_badge && (
-                    <div style={{ textAlign: 'center', background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-muted)' }}>
-                      <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '8px' }}>Live Verification Badge Badge image</p>
-                      <img 
-                        src={`/api/dashboard/verify/${sellerVerifyResult.id}/badge.png`} 
-                        alt="Verified Seller Badge"
-                        style={{ maxWidth: '100%', height: 'auto', borderRadius: '8px' }}
-                        onError={(e) => {
-                          e.target.style.display = 'none';
-                        }}
-                      />
+                  ) : (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '24px' }}>
+                      <div style={{ background: 'var(--bg-panel)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-muted)' }}>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>COMPLETED TRADES</span>
+                        <p style={{ fontSize: '1.2rem', fontWeight: 'bold', margin: 0 }}>{sellerVerifyResult.completed_trades}</p>
+                      </div>
+                      <div style={{ background: 'var(--bg-panel)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-muted)' }}>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>COMPLETION RATE</span>
+                        <p style={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--primary)', margin: 0 }}>{sellerVerifyResult.completion_rate}%</p>
+                      </div>
+                      <div style={{ background: 'var(--bg-panel)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-muted)' }}>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>POSITIVE RATINGS</span>
+                        <p style={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--secondary)', margin: 0 }}>👍 {sellerVerifyResult.positive_rate}%</p>
+                      </div>
                     </div>
                   )}
+
+                  {/* Trust Score & Text display */}
+                  <div style={{ background: 'var(--bg-panel)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-muted)', marginBottom: '16px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Reputation Score:</span>
+                      <span style={{ fontWeight: 'bold', color: sellerVerifyResult.trust_score >= 90 ? 'var(--primary)' : 'var(--accent-gold)' }}>
+                        {sellerVerifyResult.trust_score}% Trust
+                      </span>
+                    </div>
+                    <div style={{ borderTop: '1px dashed var(--border-muted)', paddingTop: '12px' }}>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>BINANCE P2P FORMATTED DISPLAY:</span>
+                      <pre style={{ 
+                        margin: 0, 
+                        background: '#070a0e', 
+                        padding: '10px', 
+                        borderRadius: '6px', 
+                        fontSize: '0.8rem', 
+                        color: 'white', 
+                        fontFamily: 'monospace',
+                        whiteSpace: 'pre-wrap'
+                      }}>
+                        {sellerVerifyResult.display_text}
+                      </pre>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -1667,27 +1764,43 @@ export default function App() {
               </button>
             </div>
 
-            {/* Config details */}
+            {/* Config details & Editor */}
             <div className="glass-card" style={{ padding: '20px' }}>
-              <h3 style={{ fontSize: '1.1rem', marginBottom: '16px' }}>Escrow Configuration settings</h3>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px' }}>
-                <div style={{ background: 'var(--bg-panel)', padding: '12px', borderRadius: '8px' }}>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Escrow Service Fee</span>
-                  <p style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>1.5%</p>
+              <h3 style={{ fontSize: '1.1rem', marginBottom: '16px' }}>Escrow Configuration & Settings</h3>
+              <form onSubmit={handleUpdateSettings} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px' }}>
+                  <div style={{ background: 'var(--bg-panel)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-muted)' }}>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>Min Trades for Profile Stats (Threshold)</label>
+                    <input 
+                      type="number" 
+                      min="0"
+                      value={systemSettings.MIN_TRADES_FOR_PROFILE_STATS} 
+                      onChange={(e) => setSystemSettings(prev => ({ ...prev, MIN_TRADES_FOR_PROFILE_STATS: parseInt(e.target.value) || 0 }))}
+                      className="form-input"
+                      style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-muted)', color: 'white', fontSize: '1rem', fontWeight: 'bold', width: '100%', padding: '8px' }}
+                    />
+                    <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px' }}>Under this cutoff, traders are labeled "New Trader" without public stats.</p>
+                  </div>
+                  <div style={{ background: 'var(--bg-panel)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-muted)' }}>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>Min Deals for [PRO] Badge</label>
+                    <input 
+                      type="number" 
+                      min="0"
+                      value={systemSettings.MIN_DEALS_FOR_BADGE} 
+                      onChange={(e) => setSystemSettings(prev => ({ ...prev, MIN_DEALS_FOR_BADGE: parseInt(e.target.value) || 0 }))}
+                      className="form-input"
+                      style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-muted)', color: 'white', fontSize: '1rem', fontWeight: 'bold', width: '100%', padding: '8px' }}
+                    />
+                    <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px' }}>Deals needed to unlock the [PRO] Verified Safe Seller badge.</p>
+                  </div>
                 </div>
-                <div style={{ background: 'var(--bg-panel)', padding: '12px', borderRadius: '8px' }}>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Min Deals for Badge</span>
-                  <p style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>10 deals</p>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', alignItems: 'center' }}>
+                  {settingsLoading && <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Saving settings...</span>}
+                  <button type="submit" className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '0.85rem' }}>
+                    Save Escrow Configuration
+                  </button>
                 </div>
-                <div style={{ background: 'var(--bg-panel)', padding: '12px', borderRadius: '8px' }}>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Free Escalation Cap</span>
-                  <p style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>2 / month</p>
-                </div>
-                <div style={{ background: 'var(--bg-panel)', padding: '12px', borderRadius: '8px' }}>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Refundable Escalation Fee</span>
-                  <p style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>KES 200.00</p>
-                </div>
-              </div>
+              </form>
             </div>
 
             {/* Users trust registry list */}

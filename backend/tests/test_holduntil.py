@@ -571,3 +571,138 @@ def test_path3_moderator_resolved_dispute_automatic_rating(db_session):
             assert r.score == 1.0  # Upheld party gets positive-equivalent signal
         else:
             assert r.score == -1.0  # At-fault party gets negative-equivalent signal
+
+def test_new_trader_profile_summary(db_session):
+    """Verify that a user with fewer than 3 completed trades is labeled as New Trader with stats hidden."""
+    from backend.app.services.rating_service import RatingService
+    from backend.app.config import settings
+    
+    user = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254799000101")
+    settings.MIN_TRADES_FOR_PROFILE_STATS = 3
+    
+    # 0 Completed deals
+    summary = RatingService.get_profile_summary(db_session, user)
+    assert summary["is_new_trader"] is True
+    assert summary["completion_rate"] is None
+    assert summary["positive_rate"] is None
+    assert "New Trader" in summary["display_text"]
+    assert summary["has_badge"] is False
+
+    # Add 2 completed deals (still below threshold of 3)
+    for i in range(2):
+        deal = Deal(
+            seller_id=user.id,
+            item_description=f"Deal {i}",
+            agreed_price=100.0,
+            status=DealStatus.COMPLETED
+        )
+        db_session.add(deal)
+    db_session.commit()
+    
+    summary = RatingService.get_profile_summary(db_session, user)
+    assert summary["is_new_trader"] is True
+    assert summary["completed_trades"] == 2
+    assert summary["completion_rate"] is None
+    assert summary["positive_rate"] is None
+    
+def test_full_trader_profile_summary(db_session):
+    """Verify that crossing the threshold shows full statistics and correct P2P display format."""
+    from backend.app.services.rating_service import RatingService
+    from backend.app.config import settings
+    
+    user = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254799000102")
+    settings.MIN_TRADES_FOR_PROFILE_STATS = 3
+    settings.MIN_DEALS_FOR_BADGE = 10
+    
+    # Create 3 completed deals
+    for i in range(3):
+        deal = Deal(
+            seller_id=user.id,
+            item_description=f"Deal {i}",
+            agreed_price=100.0,
+            status=DealStatus.COMPLETED
+        )
+        db_session.add(deal)
+    db_session.commit()
+    
+    # Should have crossed the threshold
+    summary = RatingService.get_profile_summary(db_session, user)
+    assert summary["is_new_trader"] is False
+    assert summary["completed_trades"] == 3
+    assert summary["completion_rate"] == 100.0
+    assert summary["positive_rate"] == 100.0 # Default fallback if 0 ratings
+    
+    # Check layout format contains name, trades count, rates but no badge
+    assert "\nTrades: 3 Trades (100.00%) | 👍 100.00%" in summary["display_text"]
+    assert "[PRO]" not in summary["display_text"]
+
+def test_cancellation_exclusions_in_completion_rate(db_session):
+    """Verify that cancelled-before-funding deals are excluded from completion rate, but cancelled-after-funding are included."""
+    from backend.app.services.rating_service import RatingService
+    
+    user = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254799000103")
+    
+    # 3 completed deals
+    for i in range(3):
+        deal = Deal(seller_id=user.id, item_description=f"Deal {i}", agreed_price=100.0, status=DealStatus.COMPLETED)
+        db_session.add(deal)
+        
+    # 1 cancelled BEFORE funding (no payments)
+    deal_cancelled_before = Deal(seller_id=user.id, item_description="Cancelled Before", agreed_price=100.0, status=DealStatus.CANCELLED)
+    db_session.add(deal_cancelled_before)
+    
+    # 1 cancelled AFTER funding (has a paid payment)
+    deal_cancelled_after = Deal(seller_id=user.id, item_description="Cancelled After", agreed_price=100.0, status=DealStatus.CANCELLED)
+    db_session.add(deal_cancelled_after)
+    db_session.flush()
+    
+    payment = Payment(deal_id=deal_cancelled_after.id, amount=100.0, status=PaymentStatus.PAID)
+    db_session.add(payment)
+    db_session.commit()
+    
+    # Total valid deals (denominator) should be: 3 completed + 1 cancelled-after = 4 deals
+    # (cancelled-before is excluded)
+    # Successful deals (numerator) should be: 3 completed
+    # Completion rate: 3/4 = 75.0%
+    summary = RatingService.get_profile_summary(db_session, user)
+    assert summary["is_new_trader"] is False
+    assert summary["completed_trades"] == 3
+    assert summary["completion_rate"] == 75.0
+
+def test_dispute_outcomes_in_positive_rate(db_session):
+    """Verify positive rate combines manual ratings and dispute outcomes, filtering out unapplied manual ratings."""
+    from backend.app.services.rating_service import RatingService
+    from backend.app.models import Rating, RatingSource
+    
+    user = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254799000104")
+    
+    # 3 completed deals to bypass threshold
+    for i in range(3):
+        deal = Deal(seller_id=user.id, item_description=f"Deal {i}", agreed_price=100.0, status=DealStatus.COMPLETED)
+        db_session.add(deal)
+    db_session.commit()
+    
+    # Let's get the deal IDs
+    deals = db_session.query(Deal).filter(Deal.seller_id == user.id).all()
+    
+    # Rating 1: Manual positive rating (applied)
+    r1 = Rating(deal_id=deals[0].id, ratee_id=user.id, score=1.0, rating_source=RatingSource.MANUAL, is_applied=True)
+    db_session.add(r1)
+    
+    # Rating 2: Dispute outcome positive rating (applied)
+    r2 = Rating(deal_id=deals[1].id, ratee_id=user.id, score=1.0, rating_source=RatingSource.DISPUTE_OUTCOME, is_applied=True)
+    db_session.add(r2)
+    
+    # Rating 3: Dispute outcome negative rating (applied)
+    r3 = Rating(deal_id=deals[2].id, ratee_id=user.id, score=-1.0, rating_source=RatingSource.DISPUTE_OUTCOME, is_applied=True)
+    db_session.add(r3)
+    
+    # Rating 4: Manual positive rating (unapplied / pending) -> should be ignored!
+    r4 = Rating(deal_id=deals[0].id, ratee_id=user.id, score=1.0, rating_source=RatingSource.MANUAL, is_applied=False)
+    db_session.add(r4)
+    db_session.commit()
+    
+    # Total applied ratings: 2 positive, 1 negative = 3 total.
+    # Positive rate: 2/3 = 66.67%
+    summary = RatingService.get_profile_summary(db_session, user)
+    assert summary["positive_rate"] == 66.67

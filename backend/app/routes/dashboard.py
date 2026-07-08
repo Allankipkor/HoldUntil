@@ -344,6 +344,49 @@ def override_user_trust(user_id: str, trust_score: float = Form(None), db: Sessi
     db.commit()
     return {"status": "updated", "user_id": user_id, "trust_score": user.trust_score}
 
+@router.get("/settings")
+def get_system_settings():
+    """Retrieve global configuration/rules."""
+    return {
+        "MIN_TRADES_FOR_PROFILE_STATS": getattr(settings, "MIN_TRADES_FOR_PROFILE_STATS", 3),
+        "MIN_DEALS_FOR_BADGE": settings.MIN_DEALS_FOR_BADGE
+    }
+
+@router.post("/settings")
+def update_system_settings(
+    min_trades: int = Form(None),
+    min_deals_for_badge: int = Form(None)
+):
+    """Admin-facing endpoint to update global configuration/rules."""
+    if min_trades is not None:
+        settings.MIN_TRADES_FOR_PROFILE_STATS = min_trades
+    if min_deals_for_badge is not None:
+        settings.MIN_DEALS_FOR_BADGE = min_deals_for_badge
+    return {
+        "status": "success",
+        "settings": {
+            "MIN_TRADES_FOR_PROFILE_STATS": getattr(settings, "MIN_TRADES_FOR_PROFILE_STATS", 3),
+            "MIN_DEALS_FOR_BADGE": settings.MIN_DEALS_FOR_BADGE
+        }
+    }
+
+@router.get("/users/{user_identifier}/profile")
+def get_user_public_profile(user_identifier: str, db: Session = Depends(get_db)):
+    """
+    Expose public profile details (handle, stats, badge) by user ID or phone/handle.
+    """
+    from backend.app.services.rating_service import RatingService
+    
+    user = db.query(User).filter(User.id == user_identifier).first()
+    if not user:
+        user = db.query(User).filter(User.phone_or_handle == user_identifier).first()
+        
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    summary = RatingService.get_profile_summary(db, user)
+    return summary
+
 # ----------------------------------------------------
 # PUBLIC VERIFICATION & BADGE ENDPOINTS
 # ----------------------------------------------------

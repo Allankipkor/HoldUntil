@@ -106,3 +106,100 @@ class RatingService:
             for handle, session in list(USER_SESSIONS.items()):
                 if session.get("state") == "AWAITING_RATING" and session.get("deal_id") == r.deal_id:
                     USER_SESSIONS[handle] = {"state": "IDLE", "deal_id": None}
+
+    @classmethod
+    def get_profile_summary(cls, db: Session, user: User) -> dict:
+        """
+        Modelled on Binance P2P profile. Returns badge, trade count, completion rate,
+        and positive rate. Respects the configurable 'New Trader' threshold.
+        """
+        from backend.app.config import settings
+        from backend.app.models import Deal, DealStatus, Payment, PaymentStatus, Rating, RatingSource, Dispute
+        
+        # 1. Calculate Completed trades count (reaching COMPLETED or REFUNDED status)
+        completed_trades = db.query(Deal).filter(
+            ((Deal.seller_id == user.id) | (Deal.buyer_id == user.id)),
+            Deal.status.in_([DealStatus.COMPLETED, DealStatus.REFUNDED])
+        ).count()
+        
+        # Determine configurable threshold (default to 3)
+        min_trades_threshold = getattr(settings, "MIN_TRADES_FOR_PROFILE_STATS", 3)
+        
+        is_new_trader = completed_trades < min_trades_threshold
+        
+        # Unresolved disputes
+        unresolved_disputes = db.query(Dispute).join(Deal).filter(
+            ((Deal.seller_id == user.id) | (Deal.buyer_id == user.id)),
+            Dispute.resolved_at == None
+        ).count()
+        
+        # Verified badge: 10+ completed deals, trust score >= 85, and zero unresolved disputes
+        has_badge = (completed_trades >= settings.MIN_DEALS_FOR_BADGE) and (user.trust_score >= 85.0) and (unresolved_disputes == 0)
+        
+        if is_new_trader:
+            return {
+                "phone_or_handle": user.phone_or_handle,
+                "is_new_trader": True,
+                "has_badge": False,
+                "completed_trades": completed_trades,
+                "completion_rate": None,
+                "positive_rate": None,
+                "trust_score": user.trust_score,
+                "display_text": f"{user.phone_or_handle} · New Trader"
+            }
+            
+        # 2. Calculate Completion Rate
+        # EXCLUDING deals cancelled before funding (CANCELLED status and no successful paid payment)
+        all_user_deals = db.query(Deal).filter(
+            ((Deal.seller_id == user.id) | (Deal.buyer_id == user.id)),
+            Deal.status != DealStatus.DRAFT
+        ).all()
+        
+        valid_deals_count = 0
+        successful_deals_count = 0
+        
+        for deal in all_user_deals:
+            # Check if cancelled before funding
+            if deal.status == DealStatus.CANCELLED:
+                has_paid_payment = any(
+                    p.status in [
+                        PaymentStatus.PAID,
+                        PaymentStatus.PAYOUT_PROCESSING,
+                        PaymentStatus.PAYOUT_COMPLETED,
+                        PaymentStatus.REFUND_PROCESSING,
+                        PaymentStatus.REFUND_COMPLETED
+                    ] for p in deal.payments
+                )
+                if not has_paid_payment:
+                    # Exclude cancelled-before-funding
+                    continue
+            
+            valid_deals_count += 1
+            if deal.status in [DealStatus.COMPLETED, DealStatus.REFUNDED]:
+                successful_deals_count += 1
+                
+        completion_rate = (successful_deals_count / valid_deals_count * 100.0) if valid_deals_count > 0 else 100.0
+        
+        # 3. Calculate Positive Rating Rate (using only applied/finalized ratings)
+        total_ratings = db.query(Rating).filter(Rating.ratee_id == user.id, Rating.is_applied == True).count()
+        positive_ratings = db.query(Rating).filter(Rating.ratee_id == user.id, Rating.score == 1.0, Rating.is_applied == True).count()
+        
+        positive_rate = (positive_ratings / total_ratings * 100.0) if total_ratings > 0 else 100.0
+        
+        # Format display text (two-line format)
+        badge_tag = " [PRO]" if has_badge else ""
+        display_text = (
+            f"{user.phone_or_handle}{badge_tag}\n"
+            f"Trades: {completed_trades} Trades ({completion_rate:.2f}%) | 👍 {positive_rate:.2f}%"
+        )
+        
+        return {
+            "phone_or_handle": user.phone_or_handle,
+            "is_new_trader": False,
+            "has_badge": has_badge,
+            "completed_trades": completed_trades,
+            "completion_rate": round(completion_rate, 2),
+            "positive_rate": round(positive_rate, 2),
+            "trust_score": user.trust_score,
+            "display_text": display_text
+        }
