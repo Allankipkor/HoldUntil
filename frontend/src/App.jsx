@@ -823,6 +823,31 @@ export default function App() {
                 <button onClick={() => sendSandboxMessage(sellerPhone, 'SELL', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem' }}>
                   1. Setup Deal (SELL)
                 </button>
+                {dealDetails?.deal?.status === 'awaiting_confirmation' && 
+                 dealDetails.deal.transaction_type === 'shipped' && 
+                 !dealDetails.deal.courier_name && (
+                  <div style={{ border: '1px solid var(--accent-gold)', padding: '8px', borderRadius: '6px', background: 'rgba(245,158,11,0.02)', marginTop: '4px' }}>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--accent-gold)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>Select Courier Service:</span>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '1', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>1. Sendy</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '2', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>2. G4S</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '3', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>3. Boxleo</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '4', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>4. Kenya Post</button>
+                    </div>
+                  </div>
+                )}
+                {dealDetails?.deal?.status === 'awaiting_confirmation' && 
+                 dealDetails.deal.transaction_type && 
+                 (dealDetails.deal.transaction_type !== 'shipped' || dealDetails.deal.courier_name) && 
+                 !dealDetails.deal.seller_disclaimer_acknowledged && (
+                  <button 
+                    onClick={() => sendSandboxMessage(sellerPhone, 'I ACKNOWLEDGE', 'Seller')} 
+                    className="btn btn-secondary" 
+                    style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-gold)', background: 'rgba(245,158,11,0.05)', marginTop: '4px' }}
+                  >
+                    📜 Acknowledge Disclaimer (I ACKNOWLEDGE)
+                  </button>
+                )}
                 {dealDetails?.deal?.status === 'funded' && (
                   <div style={{ border: '1px solid rgba(255,255,255,0.05)', padding: '10px', borderRadius: '8px', marginTop: '8px', background: 'rgba(255,255,255,0.01)' }}>
                     <span style={{ fontSize: '0.75rem', color: 'var(--primary)', fontWeight: 'bold', display: 'block', marginBottom: '8px' }}>
@@ -1165,20 +1190,53 @@ export default function App() {
 
                 {dealDetails?.deal?.status === 'awaiting_confirmation' && (
                   <>
-                    <button 
-                      onClick={() => sendSandboxMessage(buyerPhone, 'CONFIRM', 'Buyer')} 
-                      className="btn btn-secondary" 
-                      style={{ padding: '6px', fontSize: '0.75rem' }}
-                    >
-                      2. Confirm Deal Summary
-                    </button>
-                    <button 
-                      onClick={handleSimulatePayment} 
-                      className="btn btn-secondary" 
-                      style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--primary)', background: 'rgba(16,185,129,0.05)' }}
-                    >
-                      💳 Simulate M-Pesa Payment (STK Call)
-                    </button>
+                    {/* Step A: Confirm summary */}
+                    {!dealDetails.deal.buyer_confirmed && (
+                      <button 
+                        onClick={() => sendSandboxMessage(buyerPhone, 'CONFIRM', 'Buyer')} 
+                        className="btn btn-secondary" 
+                        style={{ padding: '6px', fontSize: '0.75rem' }}
+                      >
+                        2. Confirm Deal Summary
+                      </button>
+                    )}
+
+                    {/* Step B: Select Transaction Type */}
+                    {dealDetails.deal.buyer_confirmed && !dealDetails.deal.transaction_type && (
+                      <div style={{ border: '1px solid var(--primary)', padding: '8px', borderRadius: '6px', background: 'rgba(16,185,129,0.02)', marginTop: '4px' }}>
+                        <span style={{ fontSize: '0.7rem', color: 'var(--primary)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>Select Transaction Type:</span>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <button onClick={() => sendSandboxMessage(buyerPhone, '1', 'Buyer')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem', textAlign: 'left' }}>1. Digital Deliverable</button>
+                          <button onClick={() => sendSandboxMessage(buyerPhone, '2', 'Buyer')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem', textAlign: 'left' }}>2. Shipped Goods (Courier)</button>
+                          <button onClick={() => sendSandboxMessage(buyerPhone, '3', 'Buyer')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem', textAlign: 'left' }}>3. Local In-Person Handoff</button>
+                          <button onClick={() => sendSandboxMessage(buyerPhone, '4', 'Buyer')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem', textAlign: 'left' }}>4. Remote Physical Service</button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Step C: Acknowledge Disclaimer */}
+                    {dealDetails.deal.transaction_type && 
+                     (dealDetails.deal.transaction_type !== 'shipped' || dealDetails.deal.courier_name) && 
+                     !dealDetails.deal.buyer_disclaimer_acknowledged && (
+                      <button 
+                        onClick={() => sendSandboxMessage(buyerPhone, 'I ACKNOWLEDGE', 'Buyer')} 
+                        className="btn btn-secondary" 
+                        style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-gold)', background: 'rgba(245,158,11,0.05)', marginTop: '4px' }}
+                      >
+                        📜 Acknowledge Disclaimer (I ACKNOWLEDGE)
+                      </button>
+                    )}
+
+                    {/* Step D: Payment */}
+                    {dealDetails.deal.seller_disclaimer_acknowledged && dealDetails.deal.buyer_disclaimer_acknowledged && (
+                      <button 
+                        onClick={handleSimulatePayment} 
+                        className="btn btn-secondary" 
+                        style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--primary)', background: 'rgba(16,185,129,0.05)', marginTop: '4px' }}
+                      >
+                        💳 Simulate M-Pesa Payment (STK Call)
+                      </button>
+                    )}
                   </>
                 )}
 
