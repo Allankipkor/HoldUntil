@@ -798,17 +798,20 @@ def simulate_message_revocation(chat_log_id: str = Form(...), db: Session = Depe
 def reset_sandbox_database(db: Session = Depends(get_db)):
     """Reset the sandbox database by deleting all transactions, disputes, and sessions."""
     # Wipe database tables
+    from backend.app.models import Rating
     db.query(Payment).delete()
     db.query(Dispute).delete()
     db.query(Evidence).delete()
     db.query(ChatLog).delete()
+    db.query(Rating).delete()
     db.query(Deal).delete()
     db.query(User).filter(User.id != SYSTEM_BOT_ID).delete()
     db.commit()
     
     # Wipe in-memory user sessions
-    from backend.app.services.chat_bot import USER_SESSIONS
+    from backend.app.services.chat_bot import USER_SESSIONS, CLOSED_DEAL_SESSIONS
     USER_SESSIONS.clear()
+    CLOSED_DEAL_SESSIONS.clear()
     
     return {"status": "success", "message": "Database and active sessions reset successfully."}
 
