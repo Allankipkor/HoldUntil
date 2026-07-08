@@ -480,7 +480,7 @@ class ChatBotService:
                         db.commit()
 
                         if deal.seller_confirmed and deal.buyer_confirmed:
-                            USER_SESSIONS[deal.seller.phone_or_handle] = {"state": "AWAITING_TRANSACTION_TYPE", "deal_id": deal.id}
+                            USER_SESSIONS[deal.seller.phone_or_handle] = {"state": "IDLE", "deal_id": deal.id}
                             USER_SESSIONS[deal.buyer.phone_or_handle] = {"state": "AWAITING_TRANSACTION_TYPE", "deal_id": deal.id}
                             
                             return (
@@ -646,26 +646,55 @@ class ChatBotService:
         if deal.status != DealStatus.DRAFT:
             if deal.buyer_id == user.id:
                 session["deal_id"] = deal.id
-                session["state"] = "IDLE"
-                seller = db.query(User).filter(User.id == deal.seller_id).first()
-                seller_session = USER_SESSIONS.setdefault(seller.phone_or_handle, {"state": "IDLE", "deal_id": None})
-                seller_session["deal_id"] = deal.id
                 
-                response = (
-                    f"🤝 You are joining a secure HoldUntil escrow deal!\n\n"
-                    f"Seller: {seller.phone_or_handle}\n"
-                    f"Item: {deal.item_description}\n"
-                    f"Price: KES {deal.agreed_price:.2f}\n\n"
-                    f"📜 **ESCROW AGREEMENT DISPUTE CLAUSE:**\n"
-                    f"In the event of a dispute, either party may submit a Notice of Dispute within 5 days of shipment/deadline. "
-                    f"Supporting evidence is required. HoldUntil shall freeze funds and facilitate a negotiation window. "
-                    f"If unresolved, the Escrow Agent shall render a binding decision based on strict compliance. "
-                    f"One appeal is permitted by replying 'APPEAL' (KES 200.00 fee applies), whose senior review is final "
-                    f"within HoldUntil's internal dispute process. Governed under Kenyan Law.\n\n"
-                    f"Reply 'CONFIRM' to accept details & initiate Safaricom M-Pesa STK Push payment.\n"
-                    f"Reply 'REJECT' to decline."
-                )
-                return response
+                # Check if both have confirmed terms
+                if deal.seller_confirmed and deal.buyer_confirmed:
+                    if not deal.transaction_type:
+                        session["state"] = "AWAITING_TRANSACTION_TYPE"
+                        return (
+                            "What is the transaction type? Reply with the number:\n"
+                            "1. Digital Deliverable\n"
+                            "2. Shipped Goods (Courier)\n"
+                            "3. Local In-Person Handoff\n"
+                            "4. Remote Physical Service"
+                        )
+                    elif deal.transaction_type == "shipped" and not deal.courier_name:
+                        session["state"] = "IDLE"
+                        return "Awaiting seller's courier selection."
+                    elif not deal.buyer_disclaimer_acknowledged or not deal.seller_disclaimer_acknowledged:
+                        session["state"] = "AWAITING_DISCLAIMER_ACK"
+                        disclaimer = (
+                            "⚠️ IMPORTANT TRANSACTION DISCLAIMER ⚠️\n\n"
+                            "Evidence submitted during this transaction (photos, videos, tracking info) may be used to resolve a dispute if one arises. "
+                            "Please take evidence seriously and ensure it clearly and honestly reflects what actually happened — "
+                            "false or misleading evidence affects your trust score and may be treated as fraud.\n\n"
+                            "Reply 'I ACKNOWLEDGE' to agree and proceed."
+                        )
+                        return disclaimer
+                    else:
+                        session["state"] = "IDLE"
+                        return "This deal is funded and active. Please wait or proceed with the delivery."
+                else:
+                    session["state"] = "IDLE"
+                    seller = db.query(User).filter(User.id == deal.seller_id).first()
+                    seller_session = USER_SESSIONS.setdefault(seller.phone_or_handle, {"state": "IDLE", "deal_id": None})
+                    seller_session["deal_id"] = deal.id
+                    
+                    response = (
+                        f"🤝 You are joining a secure HoldUntil escrow deal!\n\n"
+                        f"Seller: {seller.phone_or_handle}\n"
+                        f"Item: {deal.item_description}\n"
+                        f"Price: KES {deal.agreed_price:.2f}\n\n"
+                        f"📜 **ESCROW AGREEMENT DISPUTE CLAUSE:**\n"
+                        f"In the event of a dispute, either party may submit a Notice of Dispute within 5 days of shipment/deadline. "
+                        f"Supporting evidence is required. HoldUntil shall freeze funds and facilitate a negotiation window. "
+                        f"If unresolved, the Escrow Agent shall render a binding decision based on strict compliance. "
+                        f"One appeal is permitted by replying 'APPEAL' (KES 200.00 fee applies), whose senior review is final "
+                        f"within HoldUntil's internal dispute process. Governed under Kenyan Law.\n\n"
+                        f"Reply 'CONFIRM' to accept details & initiate Safaricom M-Pesa STK Push payment.\n"
+                        f"Reply 'REJECT' to decline."
+                    )
+                    return response
             return "This deal is no longer open for joining."
         
         if deal.seller_id == user.id:
