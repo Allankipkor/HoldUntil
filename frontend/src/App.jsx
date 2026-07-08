@@ -823,6 +823,55 @@ export default function App() {
                 <button onClick={() => sendSandboxMessage(sellerPhone, 'SELL', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem' }}>
                   1. Setup Deal (SELL)
                 </button>
+                {dealDetails?.seller_session_state === 'AWAITING_DESC' && (
+                  <div style={{ border: '1px solid var(--accent-gold)', padding: '8px', borderRadius: '6px', background: 'rgba(245,158,11,0.02)', marginTop: '4px' }}>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--accent-gold)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>Select Preset Item Description:</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, 'HP Pavilion Laptop, 8GB RAM, Used', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }}>💻 HP Pavilion Laptop, 8GB RAM, Used</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, 'Digital Artwork Logo Design', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }}>🎨 Digital Artwork Logo Design</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, 'Local Handoff Sofa Bed', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }}>🛋️ Local Handoff Sofa Bed</button>
+                    </div>
+                  </div>
+                )}
+                {dealDetails?.seller_session_state === 'AWAITING_PRICE' && (
+                  <div style={{ border: '1px solid var(--accent-gold)', padding: '8px', borderRadius: '6px', background: 'rgba(245,158,11,0.02)', marginTop: '4px' }}>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--accent-gold)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>Select Preset Price (KES):</span>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '4px' }}>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '15000', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>15,000</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '3500', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>3,500</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '8000', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>8,000</button>
+                    </div>
+                  </div>
+                )}
+                {dealDetails?.seller_session_state === 'AWAITING_TIMELINE' && (
+                  <div style={{ border: '1px solid var(--accent-gold)', padding: '8px', borderRadius: '6px', background: 'rgba(245,158,11,0.02)', marginTop: '4px' }}>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--accent-gold)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>Select Preset Timeline (Days):</span>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '4px' }}>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '3', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>3 Days</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '5', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>5 Days</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '7', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>7 Days</button>
+                    </div>
+                  </div>
+                )}
+                {dealDetails?.seller_session_state === 'AWAITING_DISPUTE_REASON' && (
+                  <div style={{ border: '1px solid var(--accent-red)', padding: '8px', borderRadius: '6px', background: 'rgba(239,68,68,0.02)', marginTop: '4px' }}>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--accent-red)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>Select Dispute Reason:</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, 'Buyer claims non-delivery, but I shipped.', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }}>Buyer claims non-delivery, but I shipped</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, 'Buyer is not responding after delivery.', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }}>Buyer is not responding after delivery</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, 'Buyer damaged the item post-handoff.', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }}>Buyer damaged the item post-handoff</button>
+                    </div>
+                  </div>
+                )}
+                {dealDetails?.seller_session_state === 'AWAITING_RATING' && (
+                  <div style={{ border: '1px solid var(--primary)', padding: '8px', borderRadius: '6px', background: 'rgba(59,130,246,0.02)', marginTop: '4px' }}>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--primary)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>Submit Manual Rating:</span>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '👍', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--primary)' }}>👍 Thumbs Up</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '👎', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-red)' }}>👎 Thumbs Down</button>
+                    </div>
+                  </div>
+                )}
                 {dealDetails?.deal?.status === 'awaiting_confirmation' && 
                  dealDetails.deal.transaction_type === 'shipped' && 
                  !dealDetails.deal.courier_name && (
@@ -1177,6 +1226,27 @@ export default function App() {
               {/* Quick Buyer Actions */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '16px', borderTop: '1px solid var(--border-muted)', paddingTop: '12px' }}>
                 <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>BUYER COMMAND SHORTCUTS</span>
+                
+                {dealDetails?.buyer_session_state === 'AWAITING_DISPUTE_REASON' && (
+                  <div style={{ border: '1px solid var(--accent-red)', padding: '8px', borderRadius: '6px', background: 'rgba(239,68,68,0.02)', marginTop: '4px' }}>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--accent-red)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>Select Dispute Reason:</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <button onClick={() => sendSandboxMessage(buyerPhone, 'Item arrived damaged or broken.', 'Buyer')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }}>Item arrived damaged or broken</button>
+                      <button onClick={() => sendSandboxMessage(buyerPhone, 'Seller failed to ship or respond.', 'Buyer')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }}>Seller failed to ship or respond</button>
+                      <button onClick={() => sendSandboxMessage(buyerPhone, 'Service did not match description.', 'Buyer')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }}>Service did not match description</button>
+                    </div>
+                  </div>
+                )}
+
+                {dealDetails?.buyer_session_state === 'AWAITING_RATING' && (
+                  <div style={{ border: '1px solid var(--primary)', padding: '8px', borderRadius: '6px', background: 'rgba(59,130,246,0.02)', marginTop: '4px' }}>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--primary)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>Submit Manual Rating:</span>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
+                      <button onClick={() => sendSandboxMessage(buyerPhone, '👍', 'Buyer')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--primary)' }}>👍 Thumbs Up</button>
+                      <button onClick={() => sendSandboxMessage(buyerPhone, '👎', 'Buyer')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-red)' }}>👎 Thumbs Down</button>
+                    </div>
+                  </div>
+                )}
                 
                 {dealDetails?.deal?.status === 'draft' && (
                   <button 

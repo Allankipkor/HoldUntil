@@ -61,7 +61,13 @@ def get_deal_detail(deal_id: str, db: Session = Depends(get_db)):
     # Disputes
     disputes = db.query(Dispute).filter(Dispute.deal_id == deal.id).all()
 
+    from backend.app.services.chat_bot import USER_SESSIONS
+    seller_session = USER_SESSIONS.get(seller.phone_or_handle, {}) if seller else {}
+    buyer_session = USER_SESSIONS.get(buyer.phone_or_handle, {}) if buyer else {}
+
     return {
+        "seller_session_state": seller_session.get("state", "IDLE"),
+        "buyer_session_state": buyer_session.get("state", "IDLE"),
         "deal": {
             "id": deal.id,
             "seller_id": deal.seller_id,
