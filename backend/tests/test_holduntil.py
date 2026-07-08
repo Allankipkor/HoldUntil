@@ -407,3 +407,167 @@ def test_dispute_notification_no_leak(db_session):
             assert "We have analyzed the deal and logged the supporting evidence" in content
         elif "🤖 HoldUntil Notification" in content:
             assert "A dispute has been filed. The case has been analyzed and routed to a human mediator" in content
+
+def test_path1_clean_completion_manual_rating(db_session):
+    """Path 1: Undisputed clean completions should trigger double-blind manual rating flow."""
+    from backend.app.services.rating_service import RatingService
+    from backend.app.services.chat_bot import USER_SESSIONS
+    from backend.app.models import Rating, RatingSource
+    
+    seller = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254700000001")
+    buyer = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254700000002")
+    
+    # Reset initial trust
+    seller.trust_score = 90.0
+    buyer.trust_score = 90.0
+    db_session.commit()
+    
+    deal = Deal(
+        seller_id=seller.id,
+        buyer_id=buyer.id,
+        item_description="Test Laptop Clean",
+        agreed_price=15000.0,
+        status=DealStatus.COMPLETED
+    )
+    db_session.add(deal)
+    db_session.commit()
+    
+    # 1. Trigger rating flow
+    RatingService.trigger_post_deal_rating(db_session, deal)
+    
+    # Sessions should be AWAITING_RATING
+    assert USER_SESSIONS[seller.phone_or_handle]["state"] == "AWAITING_RATING"
+    assert USER_SESSIONS[buyer.phone_or_handle]["state"] == "AWAITING_RATING"
+    
+    # 2. Seller rates buyer 👍
+    res_seller = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller.phone_or_handle, "👍")
+    assert "hidden until the other party" in res_seller
+    
+    # Rating logged but not applied
+    r_seller = db_session.query(Rating).filter(Rating.rater_id == seller.id).first()
+    assert r_seller is not None
+    assert r_seller.score == 1.0
+    assert r_seller.is_applied is False
+    assert buyer.trust_score == 90.0
+    
+    # 3. Buyer rates seller 👍
+    res_buyer = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, buyer.phone_or_handle, "👍")
+    assert "finalized and applied" in res_buyer
+    
+    # Verify both finalized
+    db_session.refresh(seller)
+    db_session.refresh(buyer)
+    assert buyer.trust_score == 91.0  # +1.0 trust score from manual 👍
+    assert seller.trust_score == 91.0
+    
+    # Verify Rating records marked applied
+    r_buyer = db_session.query(Rating).filter(Rating.rater_id == buyer.id).first()
+    assert r_buyer.is_applied is True
+    db_session.refresh(r_seller)
+    assert r_seller.is_applied is True
+
+
+def test_path2_informally_resolved_dispute_manual_rating(db_session):
+    """Path 2: Informally resolved dispute (SELF_RELEASE) triggers the same manual rating flow."""
+    from backend.app.services.rating_service import RatingService
+    from backend.app.services.chat_bot import USER_SESSIONS
+    from backend.app.models import Dispute, DisputeTier, ResolutionMethod, Rating, RatingSource
+    
+    seller = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254700000003")
+    buyer = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254700000004")
+    
+    deal = Deal(
+        seller_id=seller.id,
+        buyer_id=buyer.id,
+        item_description="Test Dispute Self Resolve",
+        agreed_price=5000.0,
+        status=DealStatus.DISPUTED
+    )
+    db_session.add(deal)
+    db_session.commit()
+    
+    dispute = Dispute(
+        deal_id=deal.id,
+        filed_by=buyer.id,
+        reason="Delay",
+        tier=DisputeTier.TIER_2_AI
+    )
+    db_session.add(dispute)
+    db_session.commit()
+    
+    # Simulate Buyer RELEASE
+    USER_SESSIONS[buyer.phone_or_handle] = {"state": "IDLE", "deal_id": deal.id}
+    res_release = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, buyer.phone_or_handle, "RELEASE")
+    assert "released all funds" in res_release
+    
+    db_session.refresh(dispute)
+    assert dispute.resolution_method == ResolutionMethod.SELF_RELEASE
+    
+    # Simulate payout completing
+    deal.status = DealStatus.COMPLETED
+    db_session.commit()
+    RatingService.trigger_post_deal_rating(db_session, deal)
+    
+    # Verify manual rating initiated
+    assert USER_SESSIONS[seller.phone_or_handle]["state"] == "AWAITING_RATING"
+    assert USER_SESSIONS[buyer.phone_or_handle]["state"] == "AWAITING_RATING"
+
+
+def test_path3_moderator_resolved_dispute_automatic_rating(db_session):
+    """Path 3: Dispute resolved by mediator/arbitrator does NOT trigger manual rating prompt, logs dispute_outcome rating silently."""
+    from backend.app.services.rating_service import RatingService
+    from backend.app.services.chat_bot import USER_SESSIONS
+    from backend.app.models import Dispute, DisputeTier, ResolutionMethod, Rating, RatingSource, OutcomeType
+    
+    seller = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254700000005")
+    buyer = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254700000006")
+    seller.trust_score = 90.0
+    buyer.trust_score = 90.0
+    db_session.commit()
+    
+    deal = Deal(
+        seller_id=seller.id,
+        buyer_id=buyer.id,
+        item_description="Test Dispute Moderator Resolve",
+        agreed_price=8000.0,
+        status=DealStatus.DISPUTED
+    )
+    db_session.add(deal)
+    db_session.commit()
+    
+    dispute = Dispute(
+        deal_id=deal.id,
+        filed_by=buyer.id,
+        reason="Failed deliverable",
+        tier=DisputeTier.TIER_3_HUMAN,
+        resolution_method=ResolutionMethod.HUMAN_FIRST_INSTANCE
+    )
+    db_session.add(dispute)
+    db_session.commit()
+    
+    # Simulate first-instance resolution finalize (via apply_dispute_outcome)
+    from backend.app.services.ai_service import AIService
+    AIService.apply_dispute_outcome(db_session, deal, dispute, OutcomeType.RELEASE)
+    
+    deal.status = DealStatus.COMPLETED
+    db_session.commit()
+    
+    # Trigger rating flow
+    RatingService.trigger_post_deal_rating(db_session, deal)
+    
+    # Verify NO manual rating session state was set
+    assert USER_SESSIONS.get(seller.phone_or_handle, {}).get("state") != "AWAITING_RATING"
+    assert USER_SESSIONS.get(buyer.phone_or_handle, {}).get("state") != "AWAITING_RATING"
+    
+    # Verify automatic dispute outcome rating records were logged
+    ratings = db_session.query(Rating).filter(Rating.deal_id == deal.id).all()
+    assert len(ratings) == 2
+    
+    for r in ratings:
+        assert r.rating_source == RatingSource.DISPUTE_OUTCOME
+        assert r.rater_id is None
+        assert r.is_applied is True
+        if r.ratee_id == seller.id:
+            assert r.score == 1.0  # Upheld party gets positive-equivalent signal
+        else:
+            assert r.score == -1.0  # At-fault party gets negative-equivalent signal

@@ -226,8 +226,10 @@ def resolve_dispute_manually(
         if dispute.human_moderator_id == resolver.id:
             raise HTTPException(status_code=400, detail="The Senior Arbitrator must be different from the first-instance Mediator")
 
+        from backend.app.models import ResolutionMethod
         first_instance_outcome = dispute.final_outcome
         dispute.final_outcome = OutcomeType(outcome)
+        dispute.resolution_method = ResolutionMethod.APPEAL
         dispute.appeal_resolved_at = datetime.now(UTC).replace(tzinfo=None)
         dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
         
@@ -295,8 +297,10 @@ def resolve_dispute_manually(
         if resolver.role not in [UserRole.MODERATOR, UserRole.ARBITRATOR, UserRole.ADMIN]:
             raise HTTPException(status_code=403, detail="Only staff members can resolve disputes")
             
+        from backend.app.models import ResolutionMethod
         # Save outcome but do NOT trigger payouts yet (await 5-day appeal window)
         dispute.final_outcome = OutcomeType(outcome)
+        dispute.resolution_method = ResolutionMethod.HUMAN_FIRST_INSTANCE
         dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
         dispute.human_moderator_id = resolver.id
         dispute.tier = DisputeTier.TIER_3_HUMAN
@@ -803,6 +807,9 @@ def simulate_mpesa_b2c_callback(payment_ref: str = Form(...), db: Session = Depe
     payment.status = PaymentStatus.REFUND_COMPLETED if is_refund else PaymentStatus.PAYOUT_COMPLETED
     deal.status = DealStatus.REFUNDED if is_refund else DealStatus.COMPLETED
     db.commit()
+    
+    from backend.app.services.rating_service import RatingService
+    RatingService.trigger_post_deal_rating(db, deal)
     
     # Notify recipient via WhatsApp
     recipient_phone = deal.buyer.phone_or_handle if is_refund else deal.seller.phone_or_handle

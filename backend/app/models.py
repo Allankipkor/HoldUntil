@@ -55,6 +55,16 @@ class OutcomeType(str, Enum):
     REFUND = "refund"
     PARTIAL_SPLIT = "partial_split"
 
+class RatingSource(str, Enum):
+    MANUAL = "manual"
+    DISPUTE_OUTCOME = "dispute_outcome"
+
+class ResolutionMethod(str, Enum):
+    SELF_RELEASE = "self_release"
+    SELF_REFUND = "self_refund"
+    HUMAN_FIRST_INSTANCE = "human_first_instance"
+    APPEAL = "appeal"
+
 class User(Base):
     __tablename__ = "users"
 
@@ -68,6 +78,7 @@ class User(Base):
     created_at = Column(DateTime, default=utcnow)
 
     # Relationships
+    ratings_received = relationship("Rating", foreign_keys="Rating.ratee_id", back_populates="ratee")
     deals_as_seller = relationship("Deal", foreign_keys="Deal.seller_id", back_populates="seller")
     deals_as_buyer = relationship("Deal", foreign_keys="Deal.buyer_id", back_populates="buyer")
     disputes_filed = relationship("Dispute", foreign_keys="Dispute.filed_by", back_populates="filer")
@@ -138,6 +149,7 @@ class Dispute(Base):
     
     # Final Outcome (determined by AI or Human moderator)
     final_outcome = Column(SQLEnum(OutcomeType), nullable=True)
+    resolution_method = Column(SQLEnum(ResolutionMethod), nullable=True)
     resolved_at = Column(DateTime, nullable=True)
     filer_satisfied = Column(Boolean, nullable=True, default=None)
     partial_split_percentage = Column(Integer, nullable=True)
@@ -195,3 +207,20 @@ class ChatLog(Base):
     # Relationships
     deal = relationship("Deal", back_populates="chat_logs")
     sender = relationship("User", foreign_keys=[sender_id])
+
+class Rating(Base):
+    __tablename__ = "ratings"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    deal_id = Column(String(36), ForeignKey("deals.id"), nullable=False)
+    rater_id = Column(String(36), ForeignKey("users.id"), nullable=True)  # Nullable for dispute_outcome
+    ratee_id = Column(String(36), ForeignKey("users.id"), nullable=False)
+    score = Column(Float, nullable=False)  # 1.0 = thumbs up, -1.0 = thumbs down, 0.0 = neutral/split
+    rating_source = Column(SQLEnum(RatingSource), default=RatingSource.MANUAL, nullable=False)
+    is_applied = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=utcnow)
+
+    # Relationships
+    deal = relationship("Deal")
+    rater = relationship("User", foreign_keys=[rater_id])
+    ratee = relationship("User", foreign_keys=[ratee_id], back_populates="ratings_received")

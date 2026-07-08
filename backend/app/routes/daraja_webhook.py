@@ -137,6 +137,9 @@ async def mpesa_b2c_callback(request: Request, db: Session = Depends(get_db)):
             deal.status = DealStatus.REFUNDED if is_refund else DealStatus.COMPLETED
             db.commit()
             
+            from backend.app.services.rating_service import RatingService
+            RatingService.trigger_post_deal_rating(db, deal)
+            
             # Send notifications
             recipient_phone = deal.buyer.phone_or_handle if is_refund else deal.seller.phone_or_handle
             MetaService.send_text_message(

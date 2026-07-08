@@ -359,6 +359,30 @@ DECISION INSTRUCTIONS:
             if seller:
                 seller.trust_score = max(0.0, seller.trust_score - 20.0)
 
+        # Path 3 Automatic Dispute Outcome Ratings
+        from backend.app.models import Rating, RatingSource, ResolutionMethod
+        
+        if dispute.resolution_method in [ResolutionMethod.HUMAN_FIRST_INSTANCE, ResolutionMethod.APPEAL]:
+            # Delete any existing dispute_outcome ratings for this deal to avoid duplication
+            db.query(Rating).filter(
+                Rating.deal_id == deal.id,
+                Rating.rating_source == RatingSource.DISPUTE_OUTCOME
+            ).delete()
+            
+            if outcome == OutcomeType.RELEASE:
+                seller_rating = Rating(deal_id=deal.id, rater_id=None, ratee_id=deal.seller_id, score=1.0, rating_source=RatingSource.DISPUTE_OUTCOME, is_applied=True)
+                buyer_rating = Rating(deal_id=deal.id, rater_id=None, ratee_id=deal.buyer_id, score=-1.0, rating_source=RatingSource.DISPUTE_OUTCOME, is_applied=True)
+                db.add_all([seller_rating, buyer_rating])
+            elif outcome == OutcomeType.REFUND:
+                seller_rating = Rating(deal_id=deal.id, rater_id=None, ratee_id=deal.seller_id, score=-1.0, rating_source=RatingSource.DISPUTE_OUTCOME, is_applied=True)
+                buyer_rating = Rating(deal_id=deal.id, rater_id=None, ratee_id=deal.buyer_id, score=1.0, rating_source=RatingSource.DISPUTE_OUTCOME, is_applied=True)
+                db.add_all([seller_rating, buyer_rating])
+            elif outcome == OutcomeType.PARTIAL_SPLIT:
+                seller_rating = Rating(deal_id=deal.id, rater_id=None, ratee_id=deal.seller_id, score=0.0, rating_source=RatingSource.DISPUTE_OUTCOME, is_applied=True)
+                buyer_rating = Rating(deal_id=deal.id, rater_id=None, ratee_id=deal.buyer_id, score=0.0, rating_source=RatingSource.DISPUTE_OUTCOME, is_applied=True)
+                db.add_all([seller_rating, buyer_rating])
+            db.commit()
+
         db.commit()
 
         # Recalculate win rates for both parties

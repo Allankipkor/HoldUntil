@@ -18,6 +18,10 @@ def run_tier_1_checks(db: Session):
     """
     now = datetime.now(UTC).replace(tzinfo=None)
     logger.info("Running Tier 1 Auto-Resolve checks...")
+    
+    # Process expired rating windows
+    from backend.app.services.rating_service import RatingService
+    RatingService.close_pending_ratings(db)
 
     # Rule 1: No delivery evidence past deadline
     overdue_deals = db.query(Deal).filter(
@@ -66,6 +70,8 @@ def run_tier_1_checks(db: Session):
             deal.status = DealStatus.REFUNDED
             AIService.apply_dispute_outcome(db, deal, dispute, OutcomeType.REFUND)
             db.commit()
+            
+            RatingService.trigger_post_deal_rating(db, deal)
 
     # Rule 2: Seller provided evidence + buyer silent past grace period
     grace_limit = now - timedelta(hours=48)
@@ -116,6 +122,8 @@ def run_tier_1_checks(db: Session):
             deal.status = DealStatus.COMPLETED
             AIService.apply_dispute_outcome(db, deal, dispute, OutcomeType.RELEASE)
             db.commit()
+            
+            RatingService.trigger_post_deal_rating(db, deal)
 
     # Rule 3: Processing first-instance resolved disputes after appeal window
     from backend.app.config import settings
@@ -161,6 +169,8 @@ def run_tier_1_checks(db: Session):
                 
                 AIService.apply_dispute_outcome(db, deal, d, d.final_outcome, partial_split_percentage=d.partial_split_percentage)
                 db.commit()
+                
+                RatingService.trigger_post_deal_rating(db, deal)
             except Exception as e:
                 logger.error(f"Failed B2C payout for Rule 3 dispute {d.id}: {e}")
 
