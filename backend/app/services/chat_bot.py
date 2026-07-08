@@ -644,6 +644,28 @@ class ChatBotService:
             return "Invalid invitation link or deal code."
         
         if deal.status != DealStatus.DRAFT:
+            if deal.buyer_id == user.id:
+                session["deal_id"] = deal.id
+                session["state"] = "IDLE"
+                seller = db.query(User).filter(User.id == deal.seller_id).first()
+                seller_session = USER_SESSIONS.setdefault(seller.phone_or_handle, {"state": "IDLE", "deal_id": None})
+                seller_session["deal_id"] = deal.id
+                
+                response = (
+                    f"🤝 You are joining a secure HoldUntil escrow deal!\n\n"
+                    f"Seller: {seller.phone_or_handle}\n"
+                    f"Item: {deal.item_description}\n"
+                    f"Price: KES {deal.agreed_price:.2f}\n\n"
+                    f"📜 **ESCROW AGREEMENT DISPUTE CLAUSE:**\n"
+                    f"In the event of a dispute, either party may submit a Notice of Dispute within 5 days of shipment/deadline. "
+                    f"Supporting evidence is required. HoldUntil shall freeze funds and facilitate a negotiation window. "
+                    f"If unresolved, the Escrow Agent shall render a binding decision based on strict compliance. "
+                    f"One appeal is permitted by replying 'APPEAL' (KES 200.00 fee applies), whose senior review is final "
+                    f"within HoldUntil's internal dispute process. Governed under Kenyan Law.\n\n"
+                    f"Reply 'CONFIRM' to accept details & initiate Safaricom M-Pesa STK Push payment.\n"
+                    f"Reply 'REJECT' to decline."
+                )
+                return response
             return "This deal is no longer open for joining."
         
         if deal.seller_id == user.id:
