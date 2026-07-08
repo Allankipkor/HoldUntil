@@ -136,7 +136,9 @@ def get_deal_detail(deal_id: str, db: Session = Depends(get_db)):
             "escalation_fee_paid": disp.escalation_fee_paid,
             "final_outcome": disp.final_outcome,
             "resolved_at": disp.resolved_at,
-            "created_at": disp.created_at
+            "created_at": disp.created_at,
+            "response_statement": disp.response_statement,
+            "response_window_deadline": str(disp.response_window_deadline) if disp.response_window_deadline else None
         } for disp in disputes]
     }
 
@@ -185,7 +187,9 @@ def get_disputes_queue(db: Session = Depends(get_db)):
             "is_appeal": d.is_appeal,
             "appeal_fee_refund_status": d.appeal_fee_refund_status,
             "human_moderator_id": d.human_moderator_id,
-            "assigned_arbitrator_id": d.assigned_arbitrator_id
+            "assigned_arbitrator_id": d.assigned_arbitrator_id,
+            "response_statement": d.response_statement,
+            "response_window_deadline": str(d.response_window_deadline) if d.response_window_deadline else None
         })
     return result
 
@@ -316,21 +320,50 @@ def resolve_dispute_manually(
         dispute.human_moderator_id = resolver.id
         dispute.tier = DisputeTier.TIER_3_HUMAN
         
-        # Notify parties and initiate appeal window
-        MetaService.send_text_message(
-            db, PlatformType.WHATSAPP, filer.phone_or_handle,
-            f"⚖️ Human Moderator Verdict: {outcome.upper()}.\n\n"
-            f"Rationale: {reasoning}\n\n"
-            f"If you believe there was a major error, you can request one final Appeal review by replying 'APPEAL' "
-            f"(KES 200.00 fee applies) within 3 days (final within HoldUntil's internal dispute process).",
-            deal.id
-        )
-        MetaService.send_text_message(
-            db, PlatformType.WHATSAPP, non_filer_user.phone_or_handle if 'non_filer_user' in locals() else (buyer if dispute.filed_by == seller.id else seller).phone_or_handle,
-            f"⚖️ Human Moderator Verdict: {outcome.upper()}.\n\n"
-            f"Rationale: {reasoning}",
-            deal.id
-        )
+        # Determine who lost and what the decision is
+        if outcome == "release":
+            verdict_desc = "Release Payout to Seller (100%)"
+            lost_user = buyer
+            lost_label = "Buyer"
+            other_user = seller
+        elif outcome == "refund":
+            verdict_desc = "Refund to Buyer (100%)"
+            lost_user = seller
+            lost_label = "Seller"
+            other_user = buyer
+        else: # partial_split
+            pct = partial_split_percentage or 50
+            verdict_desc = f"Partial Split ({pct}% to Seller)"
+            lost_user = None # Both can appeal
+            other_user = None
+
+        # Build custom message for the lost party / parties
+        if lost_user:
+            lost_msg = (
+                f"⚖️ Human Moderator Verdict:\n"
+                f"Decision: {verdict_desc}.\n"
+                f"Rationale: {reasoning}\n\n"
+                f"If you disagree with this decision, you may reply APPEAL within 3 days (KES 200.00 fee applies) to request senior arbitration review."
+            )
+            other_msg = (
+                f"⚖️ Human Moderator Verdict:\n"
+                f"Decision: {verdict_desc}.\n"
+                f"Rationale: {reasoning}\n\n"
+                f"The other party has 3 days to appeal if they disagree, after which funds will be processed."
+            )
+            MetaService.send_text_message(db, PlatformType.WHATSAPP, lost_user.phone_or_handle, lost_msg, deal.id)
+            if other_user:
+                MetaService.send_text_message(db, PlatformType.WHATSAPP, other_user.phone_or_handle, other_msg, deal.id)
+        else:
+            # Partial split: both get the appeal option
+            split_msg = (
+                f"⚖️ Human Moderator Verdict:\n"
+                f"Decision: {verdict_desc}.\n"
+                f"Rationale: {reasoning}\n\n"
+                f"If you disagree with this split, you may reply APPEAL within 3 days (KES 200.00 fee applies) to request senior arbitration review."
+            )
+            MetaService.send_text_message(db, PlatformType.WHATSAPP, buyer.phone_or_handle, split_msg, deal.id)
+            MetaService.send_text_message(db, PlatformType.WHATSAPP, seller.phone_or_handle, split_msg, deal.id)
 
     db.commit()
     return {"status": "resolved", "final_outcome": outcome}
@@ -355,14 +388,16 @@ def get_system_settings():
     return {
         "MIN_TRADES_FOR_PROFILE_STATS": getattr(settings, "MIN_TRADES_FOR_PROFILE_STATS", 3),
         "MIN_DEALS_FOR_BADGE": settings.MIN_DEALS_FOR_BADGE,
-        "APPEAL_WINDOW_HOURS": getattr(settings, "APPEAL_WINDOW_HOURS", 72)
+        "APPEAL_WINDOW_HOURS": getattr(settings, "APPEAL_WINDOW_HOURS", 72),
+        "DISPUTE_RESPONSE_WINDOW_HOURS": getattr(settings, "DISPUTE_RESPONSE_WINDOW_HOURS", 24)
     }
 
 @router.post("/settings")
 def update_system_settings(
     min_trades: int = Form(None),
     min_deals_for_badge: int = Form(None),
-    appeal_window_hours: int = Form(None)
+    appeal_window_hours: int = Form(None),
+    dispute_response_window_hours: int = Form(None)
 ):
     """Admin-facing endpoint to update global configuration/rules."""
     if min_trades is not None:
@@ -371,12 +406,15 @@ def update_system_settings(
         settings.MIN_DEALS_FOR_BADGE = min_deals_for_badge
     if appeal_window_hours is not None:
         settings.APPEAL_WINDOW_HOURS = appeal_window_hours
+    if dispute_response_window_hours is not None:
+        settings.DISPUTE_RESPONSE_WINDOW_HOURS = dispute_response_window_hours
     return {
         "status": "success",
         "settings": {
             "MIN_TRADES_FOR_PROFILE_STATS": getattr(settings, "MIN_TRADES_FOR_PROFILE_STATS", 3),
             "MIN_DEALS_FOR_BADGE": settings.MIN_DEALS_FOR_BADGE,
-            "APPEAL_WINDOW_HOURS": getattr(settings, "APPEAL_WINDOW_HOURS", 72)
+            "APPEAL_WINDOW_HOURS": getattr(settings, "APPEAL_WINDOW_HOURS", 72),
+            "DISPUTE_RESPONSE_WINDOW_HOURS": getattr(settings, "DISPUTE_RESPONSE_WINDOW_HOURS", 24)
         }
     }
 

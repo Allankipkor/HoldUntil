@@ -202,6 +202,51 @@ def run_tier_1_checks(db: Session):
             except Exception as e:
                 logger.error(f"Failed B2C payout for Rule 3 dispute {d.id}: {e}")
 
+    # Rule 4: Processing lapsed dispute response windows
+    pending_responses = db.query(Dispute).filter(
+        Dispute.response_window_deadline != None,
+        Dispute.response_window_deadline < now,
+        Dispute.resolved_at == None,
+        Dispute.human_moderator_id == None
+    ).all()
+
+    for d in pending_responses:
+        logger.info(f"Dispute response window expired for Dispute {d.id}. Proceeding to review.")
+        d.response_statement = "No response submitted by the non-filer (response window expired)."
+        d.response_window_deadline = None
+        db.commit()
+        
+        # Trigger AI resolution check
+        try:
+            AIService.run_moderation(db, d.id)
+        except Exception as ai_err:
+            logger.error(f"AI moderation trigger error on response window lapse: {ai_err}")
+            
+        from backend.app.services.chat_bot import ChatBotService
+        ChatBotService.auto_assign_mediator(db, d)
+        
+        # Notify parties and reset non-filer's state
+        deal = db.query(Deal).filter(Deal.id == d.deal_id).first()
+        if deal:
+            non_filer_user = db.query(User).filter(User.id == (deal.seller_id if d.filed_by == deal.buyer_id else deal.buyer_id)).first()
+            if non_filer_user:
+                from backend.app.services.chat_bot import USER_SESSIONS
+                non_filer_session = USER_SESSIONS.get(non_filer_user.phone_or_handle)
+                if non_filer_session and non_filer_session.get("state") == "AWAITING_DISPUTE_RESPONSE":
+                    non_filer_session["state"] = "IDLE"
+                    
+            from backend.app.models import PlatformType
+            MetaService.send_text_message(
+                db, PlatformType.WHATSAPP, deal.buyer.phone_or_handle,
+                f"Dispute response window has closed. The dispute for deal '{deal.item_description}' has proceeded to mediator review.",
+                deal.id
+            )
+            MetaService.send_text_message(
+                db, PlatformType.WHATSAPP, deal.seller.phone_or_handle,
+                f"Dispute response window has closed. The dispute for deal '{deal.item_description}' has proceeded to mediator review.",
+                deal.id
+            )
+
 def start_scheduler(SessionLocalFactory):
     """Start APScheduler jobs."""
     def job_wrapper():

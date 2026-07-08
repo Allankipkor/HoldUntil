@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, UTC
 import uuid
 import re
 from sqlalchemy.orm import Session
-from backend.app.models import User, UserRole, Deal, DealStatus, ChatLog, PlatformType
+from backend.app.models import User, UserRole, Deal, DealStatus, ChatLog, PlatformType, Dispute, DisputeTier, OutcomeType, ResolutionMethod
 from backend.app.services.meta_service import MetaService
 from backend.app.services.daraja_service import DarajaService
 import logging
@@ -153,6 +153,39 @@ class ChatBotService:
             db.add(chat_log)
             db.commit()
 
+        # AWAITING_DISPUTE_RESPONSE State Handling
+        if session.get("state") == "AWAITING_DISPUTE_RESPONSE":
+            if active_deal_id:
+                deal = db.query(Deal).filter(Deal.id == active_deal_id).first()
+                if deal:
+                    dispute = db.query(Dispute).filter(Dispute.deal_id == deal.id, Dispute.resolved_at == None).first()
+                    if dispute:
+                        dispute.response_statement = text
+                        dispute.response_window_deadline = None  # Clear deadline as they responded
+                        db.commit()
+                        
+                        session["state"] = "IDLE"
+                        
+                        # Now trigger AI moderation & auto mediator assignment!
+                        from backend.app.services.ai_service import AIService
+                        try:
+                            AIService.run_moderation(db, dispute.id)
+                        except Exception as ai_err:
+                            logger.error(f"AI moderation trigger error: {ai_err}")
+                            
+                        cls.auto_assign_mediator(db, dispute)
+                        
+                        # Notify filer
+                        filer_user = db.query(User).filter(User.id == dispute.filed_by).first()
+                        if filer_user:
+                            MetaService.send_text_message(
+                                db, platform, filer_user.phone_or_handle,
+                                f"The other party has submitted their response: \"{text}\". The dispute is now under mediator review.",
+                                deal.id
+                            )
+                        
+                        return "Thank you. Your response statement has been recorded and submitted for mediator review."
+
         # Handle Global Commands
         if normalized_text == "HELP":
             return cls._handle_help(platform)
@@ -215,15 +248,11 @@ class ChatBotService:
             if not latest_deal:
                 return "No recent transaction found."
             
-            from backend.app.models import Dispute, DisputeTier
             from backend.app.config import settings
             dispute = db.query(Dispute).filter(Dispute.deal_id == latest_deal.id).first()
             if not dispute:
                 return "No dispute record found for this transaction."
             
-            if dispute.filed_by != user.id:
-                return "Only the user who raised the dispute can request an Appeal."
-                
             if dispute.resolved_at is None:
                 return "You can only appeal a dispute after a first-instance decision has been made."
             
@@ -232,6 +261,26 @@ class ChatBotService:
             
             if latest_deal.status != DealStatus.DISPUTED:
                 return "The appeal window has expired and funds have already been released."
+
+            # Determine appeal eligibility based on verdict outcome
+            is_eligible = False
+            lost_party_label = ""
+            
+            if dispute.final_outcome == OutcomeType.RELEASE:
+                # Release Payout fully to Seller -> Buyer lost and can appeal
+                is_eligible = (user.id == latest_deal.buyer_id)
+                lost_party_label = "Buyer"
+            elif dispute.final_outcome == OutcomeType.REFUND:
+                # Refund fully to Buyer -> Seller lost and can appeal
+                is_eligible = (user.id == latest_deal.seller_id)
+                lost_party_label = "Seller"
+            elif dispute.final_outcome == OutcomeType.PARTIAL_SPLIT:
+                # Partial split -> Either can appeal
+                is_eligible = (user.id == latest_deal.buyer_id or user.id == latest_deal.seller_id)
+                lost_party_label = "Either party"
+                
+            if not is_eligible:
+                return f"Only the party who lost the dispute ({lost_party_label}) is eligible to appeal this decision."
 
             # Mark for Senior Arbitrator review
             dispute.is_appeal = True
@@ -242,14 +291,13 @@ class ChatBotService:
             
             cls.auto_assign_arbitrator(db, dispute)
             
-            # Notify other party
-            other_phone = latest_deal.seller.phone_or_handle if user.id == latest_deal.buyer_id else latest_deal.buyer.phone_or_handle
-            MetaService.send_text_message(
-                db, platform, other_phone,
-                f"⚠️ The dispute for deal '{latest_deal.item_description}' has been appealed. "
-                f"It will be reviewed by a Senior Arbitrator. Escrow funds remain locked.",
-                latest_deal.id
+            # Notify both parties
+            appeal_notify_msg = (
+                f"⚠️ The dispute for deal '{latest_deal.item_description}' has been appealed by {user.phone_or_handle}. "
+                f"It will be reviewed by a Senior Arbitrator. Escrow funds remain locked."
             )
+            MetaService.send_text_message(db, platform, latest_deal.buyer.phone_or_handle, appeal_notify_msg, latest_deal.id)
+            MetaService.send_text_message(db, platform, latest_deal.seller.phone_or_handle, appeal_notify_msg, latest_deal.id)
             
             session["state"] = "IDLE"
             session["deal_id"] = None
@@ -263,7 +311,6 @@ class ChatBotService:
         if active_deal_id:
             deal = db.query(Deal).filter(Deal.id == active_deal_id).first()
             if deal and deal.status == DealStatus.DISPUTED:
-                from backend.app.models import Dispute, OutcomeType, ResolutionMethod
                 dispute = db.query(Dispute).filter(Dispute.deal_id == deal.id).first()
                 if dispute:
                     if normalized_text == "RELEASE" and user.id == deal.buyer_id:
@@ -672,7 +719,6 @@ class ChatBotService:
                         db.commit()
                         
                         # Create Dispute record immediately so it shows up in the queue!
-                        from backend.app.models import Dispute, DisputeTier
                         dispute = Dispute(
                             deal_id=deal.id,
                             filed_by=user.id,
@@ -698,13 +744,11 @@ class ChatBotService:
 
                 elif session["state"] == "AWAITING_DISPUTE_REASON":
                     # Update the dispute record with the detailed reason
-                    from backend.app.models import Dispute
                     dispute = db.query(Dispute).filter(Dispute.deal_id == deal.id, Dispute.resolved_at == None).first()
                     if dispute:
                         dispute.reason = text
                         db.commit()
                     else:
-                        from backend.app.models import DisputeTier
                         dispute = Dispute(
                             deal_id=deal.id,
                             filed_by=user.id,
@@ -713,25 +757,37 @@ class ChatBotService:
                         )
                         db.add(dispute)
                         db.commit()
+
+                    # Transition non-filer to response state
+                    non_filer_user = deal.seller if user.id == deal.buyer_id else deal.buyer
+                    
+                    from backend.app.config import settings
+                    now = datetime.now(UTC).replace(tzinfo=None)
+                    
+                    if settings.SIMULATION_MODE:
+                        dispute.response_window_deadline = now + timedelta(seconds=10)
+                    else:
+                        dispute.response_window_deadline = now + timedelta(hours=getattr(settings, "DISPUTE_RESPONSE_WINDOW_HOURS", 24))
+                    
+                    db.commit()
+                    
+                    # Update non-filer's session
+                    non_filer_session = USER_SESSIONS.setdefault(non_filer_user.phone_or_handle, {"state": "IDLE", "deal_id": deal.id})
+                    non_filer_session["state"] = "AWAITING_DISPUTE_RESPONSE"
+                    non_filer_session["deal_id"] = deal.id
                     
                     session["state"] = "IDLE"
                     
-                    # Notify both parties
+                    # Notify non-filer
+                    window_hours = getattr(settings, "DISPUTE_RESPONSE_WINDOW_HOURS", 24)
                     MetaService.send_text_message(
-                        db, platform, deal.seller.phone_or_handle,
-                        f"Dispute details: {text}",
+                        db, platform, non_filer_user.phone_or_handle,
+                        f"A dispute has been filed on this deal. Reason given: {text}. "
+                        f"You have {window_hours} hours to respond with your side and any supporting evidence before this is reviewed.",
                         deal.id
                     )
                     
-                    # Trigger AI resolution check
-                    from backend.app.services.ai_service import AIService
-                    try:
-                        AIResult = AIService.run_moderation(db, dispute.id)
-                    except Exception as ai_err:
-                        logger.error(f"AI moderation trigger error: {ai_err}")
-
-                    cls.auto_assign_mediator(db, dispute)
-                    return "Thank you. Your dispute statement has been recorded. Our AI Moderator is analyzing the deal transcript and evidence..."
+                    return f"Your dispute has been recorded. We have notified the other party and given them {window_hours} hours to respond with their statement and evidence."
 
         return f"HoldUntil Escrow Bot. Type 'SELL' to start a new transaction, or 'HELP' for instructions."
 

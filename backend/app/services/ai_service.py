@@ -86,6 +86,7 @@ class AIService:
             "seller_trust_score": seller.trust_score,
             "buyer_trust_score": buyer.trust_score,
             "dispute_reason": dispute.reason,
+            "dispute_response": dispute.response_statement or "No response submitted by the non-filer.",
             "transcript": transcript,
             "evidence": evidence_text,
             "transaction_type": deal.transaction_type or "shipped",
@@ -110,7 +111,8 @@ DISPUTE CONTEXT:
 - Delivery Deadline: {context['delivery_deadline']}
 - Seller Trust Score: {context['seller_trust_score']}/100
 - Buyer Trust Score: {context['buyer_trust_score']}/100
-- Dispute Reason (filed by Buyer): {context['dispute_reason']}
+- Dispute Reason (filer's statement): {context['dispute_reason']}
+- Dispute Response (non-filer's statement): {context['dispute_response']}
 
 EVIDENCE LOGS:
 {context['evidence']}

@@ -56,7 +56,8 @@ export default function App() {
   const [systemSettings, setSystemSettings] = useState({
     MIN_TRADES_FOR_PROFILE_STATS: 3,
     MIN_DEALS_FOR_BADGE: 10,
-    APPEAL_WINDOW_HOURS: 72
+    APPEAL_WINDOW_HOURS: 72,
+    DISPUTE_RESPONSE_WINDOW_HOURS: 24
   });
   const [settingsLoading, setSettingsLoading] = useState(false);
 
@@ -202,6 +203,7 @@ export default function App() {
       formData.append("min_trades", systemSettings.MIN_TRADES_FOR_PROFILE_STATS);
       formData.append("min_deals_for_badge", systemSettings.MIN_DEALS_FOR_BADGE);
       formData.append("appeal_window_hours", systemSettings.APPEAL_WINDOW_HOURS || 72);
+      formData.append("dispute_response_window_hours", systemSettings.DISPUTE_RESPONSE_WINDOW_HOURS || 24);
       
       const res = await fetch('/api/dashboard/settings', {
         method: 'POST',
@@ -1865,6 +1867,18 @@ export default function App() {
                       style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-muted)', color: 'white', fontSize: '1rem', fontWeight: 'bold', width: '100%', padding: '8px' }}
                     />
                     <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px' }}>Hours allowed to file an appeal post first-instance decision.</p>
+                  </div>
+                  <div style={{ background: 'var(--bg-panel)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-muted)' }}>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>Dispute Response Window (Hours)</label>
+                    <input 
+                      type="number" 
+                      min="1"
+                      value={systemSettings.DISPUTE_RESPONSE_WINDOW_HOURS || 24} 
+                      onChange={(e) => setSystemSettings(prev => ({ ...prev, DISPUTE_RESPONSE_WINDOW_HOURS: parseInt(e.target.value) || 24 }))}
+                      className="form-input"
+                      style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-muted)', color: 'white', fontSize: '1rem', fontWeight: 'bold', width: '100%', padding: '8px' }}
+                    />
+                    <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px' }}>Hours allowed for the non-filing party to submit their statement.</p>
                   </div>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', alignItems: 'center' }}>

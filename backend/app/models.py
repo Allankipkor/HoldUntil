@@ -163,6 +163,8 @@ class Dispute(Base):
     appeal_fee_payout_ref = Column(String(100), nullable=True, index=True)
     assigned_arbitrator_id = Column(String(36), ForeignKey("users.id"), nullable=True)
     appeal_reminder_sent = Column(Boolean, default=False, nullable=False)
+    response_statement = Column(Text, nullable=True)
+    response_window_deadline = Column(DateTime, nullable=True)
     
     created_at = Column(DateTime, default=utcnow)
 

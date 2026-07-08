@@ -243,9 +243,13 @@ def test_dispute_resolution_and_trust_adjustment(db_session):
     assert dispute.tier == DisputeTier.TIER_2_AI
     assert dispute.filed_by == buyer.id
     
-    # 3. Buyer submits dispute reason -> triggers AI Moderator recommender-only check
+    # 3. Buyer submits dispute reason -> starts response window
     reply_reason = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, buyer_phone, "The box is empty!")
-    assert "analyzing" in reply_reason.lower()
+    assert "recorded" in reply_reason
+    
+    # Seller submits response to trigger AI analysis
+    reply_seller = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "I sent a Sony headphone.")
+    assert "recorded and submitted" in reply_seller
     
     db_session.refresh(dispute)
     db_session.refresh(deal)
@@ -771,3 +775,118 @@ def test_dispute_auto_assignment_and_reminders(db_session):
     
     # The reminder should have fired and marked appeal_reminder_sent = True
     assert d_rem.appeal_reminder_sent is True
+
+def test_non_filer_appeals_if_lost(db_session):
+    """Verify that the party who lost is eligible to appeal (non-filer loses case)."""
+    from backend.app.models import User, UserRole, Dispute, DisputeTier, Deal, DealStatus, OutcomeType
+    from backend.app.services.chat_bot import ChatBotService
+    from datetime import datetime, UTC
+    
+    # Setup deal
+    buyer = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254700000001")
+    seller = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254700000002")
+    deal = Deal(seller_id=seller.id, buyer_id=buyer.id, item_description="EliteBook", agreed_price=100.0, status=DealStatus.DISPUTED)
+    db_session.add(deal)
+    db_session.commit()
+    
+    # Dispute filed by Buyer (filer = buyer)
+    dispute = Dispute(
+        deal_id=deal.id,
+        filed_by=buyer.id,
+        reason="Corrupt file",
+        tier=DisputeTier.TIER_3_HUMAN,
+        final_outcome=OutcomeType.REFUND, # Fully favors Buyer (filer won, non-filer seller lost)
+        resolved_at=datetime.now(UTC).replace(tzinfo=None)
+    )
+    db_session.add(dispute)
+    db_session.commit()
+    
+    # 1. Non-filer (Seller) appeals -> should be allowed since they lost the case!
+    reply = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, "254700000002", "APPEAL")
+    assert "Dispute appealed successfully" in reply
+    
+    # Reset is_appeal to test other branches
+    dispute.is_appeal = False
+    dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
+    db_session.commit()
+    
+    # 2. Filer (Buyer) won -> if buyer tries to appeal, it should be rejected because they won!
+    reply_fail = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, "254700000001", "APPEAL")
+    assert "Only the party who lost the dispute (Seller) is eligible to appeal" in reply_fail
+
+def test_filer_appeals_if_lost(db_session):
+    """Verify that the filer is eligible to appeal if they lost the case."""
+    from backend.app.models import User, UserRole, Dispute, DisputeTier, Deal, DealStatus, OutcomeType
+    from backend.app.services.chat_bot import ChatBotService
+    from datetime import datetime, UTC
+    
+    buyer = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254700000003")
+    seller = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254700000004")
+    deal = Deal(seller_id=seller.id, buyer_id=buyer.id, item_description="EliteBook", agreed_price=100.0, status=DealStatus.DISPUTED)
+    db_session.add(deal)
+    db_session.commit()
+    
+    # Dispute filed by Buyer (filer = buyer)
+    dispute = Dispute(
+        deal_id=deal.id,
+        filed_by=buyer.id,
+        reason="Corrupt file",
+        tier=DisputeTier.TIER_3_HUMAN,
+        final_outcome=OutcomeType.RELEASE, # Fully favors Seller (filer lost, non-filer won)
+        resolved_at=datetime.now(UTC).replace(tzinfo=None)
+    )
+    db_session.add(dispute)
+    db_session.commit()
+    
+    # Filer (Buyer) lost -> they should be allowed to appeal!
+    reply = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, "254700000003", "APPEAL")
+    assert "Dispute appealed successfully" in reply
+
+def test_response_window_flow_evidence_before_review(db_session):
+    """Verify response window flow: dispute filing notifies non-filer, non-filer submits evidence and response, triggering AI/mediator assignment."""
+    from backend.app.models import User, UserRole, Dispute, DisputeTier, Deal, DealStatus, Evidence
+    from backend.app.services.chat_bot import ChatBotService, USER_SESSIONS
+    
+    buyer = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254700000005")
+    seller = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254700000006")
+    deal = Deal(seller_id=seller.id, buyer_id=buyer.id, item_description="Laptop", agreed_price=100.0, status=DealStatus.SHIPPED)
+    db_session.add(deal)
+    db_session.commit()
+    
+    # Initialize buyer session
+    buyer_sess = USER_SESSIONS.setdefault("254700000005", {"state": "IDLE", "deal_id": deal.id})
+    
+    # 1. Buyer files dispute
+    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, "254700000005", "NO")
+    assert buyer_sess["state"] == "AWAITING_DISPUTE_REASON"
+    
+    # Buyer submits statement
+    reply_filer = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, "254700000005", "It was broken.")
+    assert "Your dispute has been recorded" in reply_filer
+    assert buyer_sess["state"] == "IDLE"
+    
+    # Verify non-filer (seller) is transitioned to AWAITING_DISPUTE_RESPONSE
+    seller_sess = USER_SESSIONS.get("254700000006")
+    assert seller_sess is not None
+    assert seller_sess["state"] == "AWAITING_DISPUTE_RESPONSE"
+    
+    dispute = db_session.query(Dispute).filter(Dispute.deal_id == deal.id).first()
+    assert dispute is not None
+    assert dispute.response_window_deadline is not None
+    assert dispute.human_moderator_id is None # Not assigned yet!
+    
+    # 2. Non-filer (Seller) uploads evidence first (simulated database upload)
+    ev = Evidence(deal_id=deal.id, submitted_by=seller.id, file_url="/test/evidence.png")
+    db_session.add(ev)
+    db_session.commit()
+    
+    # 3. Non-filer (Seller) submits statement
+    reply_nonfiler = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, "254700000006", "I sent a working device.")
+    assert "Your response statement has been recorded" in reply_nonfiler
+    assert seller_sess["state"] == "IDLE"
+    
+    # Verify dispute is updated and mediator is auto-assigned
+    db_session.refresh(dispute)
+    assert dispute.response_statement == "I sent a working device."
+    assert dispute.response_window_deadline is None
+    assert dispute.human_moderator_id is not None
