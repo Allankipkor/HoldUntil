@@ -174,24 +174,15 @@ DECISION INSTRUCTIONS:
         # Send platform notifications indicating automated findings and routing to Human Moderator
         MetaService.send_text_message(
             db, PlatformType.WHATSAPP, filer_user.phone_or_handle,
-            f"🤖 HoldUntil Automated Check: We have analyzed the deal. "
-            f"Supporting evidence has been logged (Day 0). "
-            f"We have routed your dispute to a Human Moderator for a binding decision. "
-            f"AI Recommendation: {result['outcome'].upper()} (Confidence: {int(result['confidence']*100)}%). "
-            f"Escrow funds will remain frozen until a decision is rendered.\n\n"
-            f"💡 You can resolve this informally: The buyer can reply 'RELEASE' to release funds to the seller, "
-            f"or the seller can reply 'REFUND' to return funds to the buyer.",
+            "🤖 HoldUntil Automated Check: We have analyzed the deal and logged the supporting evidence. Your dispute has been routed to a Human Moderator for a binding decision. Escrow funds will remain frozen until a decision is rendered.\n\n"
+            "💡 You can resolve this informally: The buyer can reply 'RELEASE' to release funds to the seller, or the seller can reply 'REFUND' to return funds to the buyer.",
             deal.id
         )
         
         MetaService.send_text_message(
             db, PlatformType.WHATSAPP, non_filer_user.phone_or_handle,
-            f"🤖 HoldUntil Notification: A dispute has been filed. "
-            f"The case has been routed to a Human Moderator for a binding decision. "
-            f"AI Recommendation: {result['outcome'].upper()}. "
-            f"Escrow funds remain frozen.\n\n"
-            f"💡 You can resolve this informally: The buyer can reply 'RELEASE' to release funds to the seller, "
-            f"or the seller can reply 'REFUND' to return funds to the buyer.",
+            "🤖 HoldUntil Notification: A dispute has been filed. The case has been analyzed and routed to a human mediator. Escrow funds remain frozen.\n\n"
+            "💡 You can resolve this informally: The buyer can reply 'RELEASE' to release funds, or the seller can reply 'REFUND' to return funds.",
             deal.id
         )
 

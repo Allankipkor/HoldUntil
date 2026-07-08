@@ -351,3 +351,59 @@ def test_in_app_evidence_enforcement_and_video_call(db_session):
     assert ev.in_app_captured is True
     assert ev.video_call_log is not None
     assert ev.video_call_log["duration_seconds"] == 120
+
+def test_dispute_notification_no_leak(db_session):
+    """Ensure that user-facing dispute chat logs do NOT leak the AI recommendation or confidence score, but it is stored in the Dispute model."""
+    from backend.app.models import Dispute, DisputeTier, OutcomeType, ChatLog
+    from backend.app.services.ai_service import AIService
+    
+    seller = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254711111111")
+    buyer = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254722222222")
+    
+    deal = Deal(
+        seller_id=seller.id,
+        buyer_id=buyer.id,
+        item_description="Test Laptop",
+        agreed_price=10000.0,
+        status=DealStatus.DISPUTED
+    )
+    db_session.add(deal)
+    db_session.commit()
+    
+    dispute = Dispute(
+        deal_id=deal.id,
+        filed_by=buyer.id,
+        reason="Screen arrived broken",
+        tier=DisputeTier.TIER_2_AI
+    )
+    db_session.add(dispute)
+    db_session.commit()
+    
+    # Trigger moderation
+    AIService.run_moderation(db_session, dispute.id)
+    
+    # Refresh deal and dispute from database
+    db_session.refresh(deal)
+    db_session.refresh(dispute)
+    
+    # 1. Assert backend internal data is fully preserved
+    assert dispute.ai_decision is not None
+    assert dispute.ai_confidence is not None
+    assert dispute.ai_reasoning is not None
+    
+    # 2. Check the chat logs written to database for this deal
+    logs = db_session.query(ChatLog).filter(ChatLog.deal_id == deal.id).all()
+    assert len(logs) > 0
+    
+    for log in logs:
+        content = log.message_content
+        # Ensure it does NOT leak "AI Recommendation", "Confidence", or the actual recommendation value in user-facing message
+        assert "AI Recommendation" not in content
+        assert "Confidence" not in content
+        
+        # Verify it has the exact wording requested
+        if "🤖 HoldUntil Automated Check" in content:
+            assert "Your dispute has been routed to a Human Moderator" in content
+            assert "We have analyzed the deal and logged the supporting evidence" in content
+        elif "🤖 HoldUntil Notification" in content:
+            assert "A dispute has been filed. The case has been analyzed and routed to a human mediator" in content
