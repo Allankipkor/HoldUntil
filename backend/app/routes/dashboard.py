@@ -77,6 +77,9 @@ def get_deal_detail(deal_id: str, db: Session = Depends(get_db)):
             "tracking_number": deal.tracking_number,
             "seller_confirmed": deal.seller_confirmed,
             "buyer_confirmed": deal.buyer_confirmed,
+            "transaction_type": deal.transaction_type,
+            "seller_disclaimer_acknowledged": deal.seller_disclaimer_acknowledged,
+            "buyer_disclaimer_acknowledged": deal.buyer_disclaimer_acknowledged,
             "created_at": deal.created_at
         },
         "payments": [{
@@ -96,6 +99,12 @@ def get_deal_detail(deal_id: str, db: Session = Depends(get_db)):
             "exif_data": ev.exif_data,
             "dynamic_code_detected": ev.dynamic_code_detected,
             "courier_verified": ev.courier_verified,
+            "in_app_captured": ev.in_app_captured,
+            "captured_timestamp": ev.captured_timestamp,
+            "gps_latitude": ev.gps_latitude,
+            "gps_longitude": ev.gps_longitude,
+            "deliverable_file_url": ev.deliverable_file_url,
+            "video_call_log": ev.video_call_log,
             "created_at": ev.created_at
         } for ev in evidences],
         "chat_logs": [{
