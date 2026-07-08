@@ -7,7 +7,7 @@ from backend.app.database import engine, Base, SessionLocal, get_db
 from backend.app.routes import meta_webhook, daraja_webhook, dashboard
 from backend.app.services.scheduler import start_scheduler
 from backend.app.services.chat_bot import ChatBotService, USER_SESSIONS
-from backend.app.models import PlatformType
+from backend.app.models import PlatformType, User, Deal, DealStatus
 import logging
 
 # Configure Logging
