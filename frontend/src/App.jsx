@@ -917,16 +917,16 @@ export default function App() {
               {/* Quick Seller Actions */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '16px', borderTop: '1px solid var(--border-muted)', paddingTop: '12px' }}>
                 <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 'bold' }}>SELLER COMMAND SHORTCUTS</span>
-                <button onClick={() => sendSandboxMessage(sellerPhone, 'SELL', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem' }}>
+                <button onClick={() => sendSandboxMessage(sellerPhone, 'SELL', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem' }} disabled={sandboxLoading}>
                   1. Setup Deal (SELL)
                 </button>
                 {dealDetails?.seller_session_state === 'AWAITING_DESC' && (
                   <div style={{ border: '1px solid var(--accent-gold)', padding: '8px', borderRadius: '6px', background: 'rgba(245,158,11,0.02)', marginTop: '4px' }}>
                     <span style={{ fontSize: '0.7rem', color: 'var(--accent-gold)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>Select Preset Item Description:</span>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <button onClick={() => sendSandboxMessage(sellerPhone, 'HP Pavilion Laptop, 8GB RAM, Used', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }}>💻 HP Pavilion Laptop, 8GB RAM, Used</button>
-                      <button onClick={() => sendSandboxMessage(sellerPhone, 'Digital Artwork Logo Design', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }}>🎨 Digital Artwork Logo Design</button>
-                      <button onClick={() => sendSandboxMessage(sellerPhone, 'Local Handoff Sofa Bed', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }}>🛋️ Local Handoff Sofa Bed</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, 'HP Pavilion Laptop, 8GB RAM, Used', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }} disabled={sandboxLoading}>💻 HP Pavilion Laptop, 8GB RAM, Used</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, 'Digital Artwork Logo Design', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }} disabled={sandboxLoading}>🎨 Digital Artwork Logo Design</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, 'Local Handoff Sofa Bed', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }} disabled={sandboxLoading}>🛋️ Local Handoff Sofa Bed</button>
                     </div>
                   </div>
                 )}
@@ -934,9 +934,9 @@ export default function App() {
                   <div style={{ border: '1px solid var(--accent-gold)', padding: '8px', borderRadius: '6px', background: 'rgba(245,158,11,0.02)', marginTop: '4px' }}>
                     <span style={{ fontSize: '0.7rem', color: 'var(--accent-gold)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>Select Preset Price (KES):</span>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '4px' }}>
-                      <button onClick={() => sendSandboxMessage(sellerPhone, '15000', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>15,000</button>
-                      <button onClick={() => sendSandboxMessage(sellerPhone, '3500', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>3,500</button>
-                      <button onClick={() => sendSandboxMessage(sellerPhone, '8000', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>8,000</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '15000', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }} disabled={sandboxLoading}>15,000</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '3500', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }} disabled={sandboxLoading}>3,500</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '8000', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }} disabled={sandboxLoading}>8,000</button>
                     </div>
                   </div>
                 )}
@@ -944,9 +944,9 @@ export default function App() {
                   <div style={{ border: '1px solid var(--accent-gold)', padding: '8px', borderRadius: '6px', background: 'rgba(245,158,11,0.02)', marginTop: '4px' }}>
                     <span style={{ fontSize: '0.7rem', color: 'var(--accent-gold)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>Select Preset Timeline (Days):</span>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '4px' }}>
-                      <button onClick={() => sendSandboxMessage(sellerPhone, '3', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>3 Days</button>
-                      <button onClick={() => sendSandboxMessage(sellerPhone, '5', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>5 Days</button>
-                      <button onClick={() => sendSandboxMessage(sellerPhone, '7', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>7 Days</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '3', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }} disabled={sandboxLoading}>3 Days</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '5', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }} disabled={sandboxLoading}>5 Days</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '7', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }} disabled={sandboxLoading}>7 Days</button>
                     </div>
                   </div>
                 )}
@@ -954,9 +954,9 @@ export default function App() {
                   <div style={{ border: '1px solid var(--accent-red)', padding: '8px', borderRadius: '6px', background: 'rgba(239,68,68,0.02)', marginTop: '4px' }}>
                     <span style={{ fontSize: '0.7rem', color: 'var(--accent-red)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>Select Dispute Reason:</span>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <button onClick={() => sendSandboxMessage(sellerPhone, 'Buyer claims non-delivery, but I shipped.', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }}>Buyer claims non-delivery, but I shipped</button>
-                      <button onClick={() => sendSandboxMessage(sellerPhone, 'Buyer is not responding after delivery.', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }}>Buyer is not responding after delivery</button>
-                      <button onClick={() => sendSandboxMessage(sellerPhone, 'Buyer damaged the item post-handoff.', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }}>Buyer damaged the item post-handoff</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, 'Buyer claims non-delivery, but I shipped.', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }} disabled={sandboxLoading}>Buyer claims non-delivery, but I shipped</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, 'Buyer is not responding after delivery.', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }} disabled={sandboxLoading}>Buyer is not responding after delivery</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, 'Buyer damaged the item post-handoff.', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.7rem', textAlign: 'left' }} disabled={sandboxLoading}>Buyer damaged the item post-handoff</button>
                     </div>
                   </div>
                 )}
@@ -964,8 +964,8 @@ export default function App() {
                   <div style={{ border: '1px solid var(--primary)', padding: '8px', borderRadius: '6px', background: 'rgba(59,130,246,0.02)', marginTop: '4px' }}>
                     <span style={{ fontSize: '0.7rem', color: 'var(--primary)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>Submit Manual Rating:</span>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
-                      <button onClick={() => sendSandboxMessage(sellerPhone, '👍', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--primary)' }}>👍 Thumbs Up</button>
-                      <button onClick={() => sendSandboxMessage(sellerPhone, '👎', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-red)' }}>👎 Thumbs Down</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '👍', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--primary)' }} disabled={sandboxLoading}>👍 Thumbs Up</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '👎', 'Seller')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-red)' }} disabled={sandboxLoading}>👎 Thumbs Down</button>
                     </div>
                   </div>
                 )}
@@ -975,10 +975,10 @@ export default function App() {
                   <div style={{ border: '1px solid var(--accent-gold)', padding: '8px', borderRadius: '6px', background: 'rgba(245,158,11,0.02)', marginTop: '4px' }}>
                     <span style={{ fontSize: '0.7rem', color: 'var(--accent-gold)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>Select Courier Service:</span>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
-                      <button onClick={() => sendSandboxMessage(sellerPhone, '1', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>1. Sendy</button>
-                      <button onClick={() => sendSandboxMessage(sellerPhone, '2', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>2. G4S</button>
-                      <button onClick={() => sendSandboxMessage(sellerPhone, '3', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>3. Boxleo</button>
-                      <button onClick={() => sendSandboxMessage(sellerPhone, '4', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }}>4. Kenya Post</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '1', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }} disabled={sandboxLoading}>1. Sendy</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '2', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }} disabled={sandboxLoading}>2. G4S</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '3', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }} disabled={sandboxLoading}>3. Boxleo</button>
+                      <button onClick={() => sendSandboxMessage(sellerPhone, '4', 'Seller')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem' }} disabled={sandboxLoading}>4. Kenya Post</button>
                     </div>
                   </div>
                 )}
@@ -990,6 +990,7 @@ export default function App() {
                     onClick={() => sendSandboxMessage(sellerPhone, 'I ACKNOWLEDGE', 'Seller')} 
                     className="btn btn-secondary" 
                     style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-gold)', background: 'rgba(245,158,11,0.05)', marginTop: '4px' }}
+                    disabled={sandboxLoading}
                   >
                     📜 Acknowledge Disclaimer (I ACKNOWLEDGE)
                   </button>
@@ -1339,8 +1340,8 @@ export default function App() {
                   <div style={{ border: '1px solid var(--primary)', padding: '8px', borderRadius: '6px', background: 'rgba(59,130,246,0.02)', marginTop: '4px' }}>
                     <span style={{ fontSize: '0.7rem', color: 'var(--primary)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>Submit Manual Rating:</span>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
-                      <button onClick={() => sendSandboxMessage(buyerPhone, '👍', 'Buyer')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--primary)' }}>👍 Thumbs Up</button>
-                      <button onClick={() => sendSandboxMessage(buyerPhone, '👎', 'Buyer')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-red)' }}>👎 Thumbs Down</button>
+                      <button onClick={() => sendSandboxMessage(buyerPhone, '👍', 'Buyer')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--primary)' }} disabled={sandboxLoading}>👍 Thumbs Up</button>
+                      <button onClick={() => sendSandboxMessage(buyerPhone, '👎', 'Buyer')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-red)' }} disabled={sandboxLoading}>👎 Thumbs Down</button>
                     </div>
                   </div>
                 )}
@@ -1350,6 +1351,7 @@ export default function App() {
                     onClick={() => sendSandboxMessage(buyerPhone, `JOIN_${dealDetails.deal.id}`, 'Buyer')} 
                     className="btn btn-secondary" 
                     style={{ padding: '6px', fontSize: '0.75rem' }}
+                    disabled={sandboxLoading}
                   >
                     1. Tap Invite Link (JOIN)
                   </button>
@@ -1363,6 +1365,7 @@ export default function App() {
                         onClick={() => sendSandboxMessage(buyerPhone, 'CONFIRM', 'Buyer')} 
                         className="btn btn-secondary" 
                         style={{ padding: '6px', fontSize: '0.75rem' }}
+                        disabled={sandboxLoading}
                       >
                         2. Confirm Deal Summary
                       </button>
@@ -1373,10 +1376,10 @@ export default function App() {
                       <div style={{ border: '1px solid var(--primary)', padding: '8px', borderRadius: '6px', background: 'rgba(16,185,129,0.02)', marginTop: '4px' }}>
                         <span style={{ fontSize: '0.7rem', color: 'var(--primary)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>Select Transaction Type:</span>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                          <button onClick={() => sendSandboxMessage(buyerPhone, '1', 'Buyer')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem', textAlign: 'left' }}>1. Digital Deliverable</button>
-                          <button onClick={() => sendSandboxMessage(buyerPhone, '2', 'Buyer')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem', textAlign: 'left' }}>2. Shipped Goods (Courier)</button>
-                          <button onClick={() => sendSandboxMessage(buyerPhone, '3', 'Buyer')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem', textAlign: 'left' }}>3. Local In-Person Handoff</button>
-                          <button onClick={() => sendSandboxMessage(buyerPhone, '4', 'Buyer')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem', textAlign: 'left' }}>4. Remote Physical Service</button>
+                          <button onClick={() => sendSandboxMessage(buyerPhone, '1', 'Buyer')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem', textAlign: 'left' }} disabled={sandboxLoading}>1. Digital Deliverable</button>
+                          <button onClick={() => sendSandboxMessage(buyerPhone, '2', 'Buyer')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem', textAlign: 'left' }} disabled={sandboxLoading}>2. Shipped Goods (Courier)</button>
+                          <button onClick={() => sendSandboxMessage(buyerPhone, '3', 'Buyer')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem', textAlign: 'left' }} disabled={sandboxLoading}>3. Local In-Person Handoff</button>
+                          <button onClick={() => sendSandboxMessage(buyerPhone, '4', 'Buyer')} className="btn btn-secondary" style={{ padding: '4px', fontSize: '0.7rem', textAlign: 'left' }} disabled={sandboxLoading}>4. Remote Physical Service</button>
                         </div>
                       </div>
                     )}
@@ -1389,6 +1392,7 @@ export default function App() {
                         onClick={() => sendSandboxMessage(buyerPhone, 'I ACKNOWLEDGE', 'Buyer')} 
                         className="btn btn-secondary" 
                         style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-gold)', background: 'rgba(245,158,11,0.05)', marginTop: '4px' }}
+                        disabled={sandboxLoading}
                       >
                         📜 Acknowledge Disclaimer (I ACKNOWLEDGE)
                       </button>
@@ -1400,6 +1404,7 @@ export default function App() {
                         onClick={handleSimulatePayment} 
                         className="btn btn-secondary" 
                         style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--primary)', background: 'rgba(16,185,129,0.05)', marginTop: '4px' }}
+                        disabled={sandboxLoading}
                       >
                         💳 Simulate M-Pesa Payment (STK Call)
                       </button>
@@ -1409,10 +1414,10 @@ export default function App() {
 
                 {dealDetails?.deal?.status === 'shipped' && !showBuyerConfirmDeclaration && (
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px' }}>
-                    <button onClick={() => setShowBuyerConfirmDeclaration(true)} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--primary)' }}>
+                    <button onClick={() => setShowBuyerConfirmDeclaration(true)} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--primary)' }} disabled={sandboxLoading}>
                       Confirm Receive (YES)
                     </button>
-                    <button onClick={() => sendSandboxMessage(buyerPhone, 'NO', 'Buyer')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-red)' }}>
+                    <button onClick={() => sendSandboxMessage(buyerPhone, 'NO', 'Buyer')} className="btn btn-secondary" style={{ padding: '6px', fontSize: '0.75rem', borderColor: 'var(--accent-red)' }} disabled={sandboxLoading}>
                       Dispute Deal (NO)
                     </button>
                   </div>
@@ -1425,6 +1430,7 @@ export default function App() {
                       onClick={() => { sendSandboxMessage(buyerPhone, 'YES', 'Buyer'); setShowBuyerConfirmDeclaration(false); }} 
                       className="btn btn-primary" 
                       style={{ padding: '6px', fontSize: '0.7rem', background: 'var(--primary)', color: 'white', border: 'none', cursor: 'pointer' }}
+                      disabled={sandboxLoading}
                     >
                       1. I have confirmed and received
                     </button>
@@ -1432,6 +1438,7 @@ export default function App() {
                       onClick={() => { sendSandboxMessage(buyerPhone, 'NO', 'Buyer'); setShowBuyerConfirmDeclaration(false); }} 
                       className="btn btn-secondary" 
                       style={{ padding: '6px', fontSize: '0.7rem', borderColor: 'var(--accent-red)', color: 'var(--accent-red)', cursor: 'pointer' }}
+                      disabled={sandboxLoading}
                     >
                       2. I confirm I haven't received the item
                     </button>

@@ -9,6 +9,9 @@ from backend.app.services.scheduler import start_scheduler
 from backend.app.services.chat_bot import ChatBotService, USER_SESSIONS
 from backend.app.models import PlatformType, User, Deal, DealStatus
 import logging
+import time
+
+LAST_PROCESSED_MESSAGES = {}
 
 # Configure Logging
 logging.basicConfig(
@@ -104,11 +107,21 @@ def dialogue_chat_simulator(
     Receives chat messages directly from the React interface, Feeds it to the bot,
     and returns the bot's raw response immediately (in addition to logging).
     """
+    # 1. Idempotency safety net (2-second window)
+    now = time.time()
+    last_msg = LAST_PROCESSED_MESSAGES.get(phone_or_handle)
+    if last_msg:
+        last_time, last_text, last_reply_data = last_msg
+        if now - last_time < 2.0 and last_text == message:
+            logger.info(f"Duplicate message '{message}' ignored (idempotency key match for {phone_or_handle})")
+            return last_reply_data
+
     try:
         plat_enum = PlatformType(platform.lower())
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid platform. Must be whatsapp, messenger, or instagram.")
 
+    # 2. Process message exactly ONCE
     bot_reply = ChatBotService.process_message(
         db=db,
         platform=plat_enum,
@@ -117,9 +130,9 @@ def dialogue_chat_simulator(
         media_url=media_url
     )
 
-    # Capture deal ID before running the state machine
-    session_before = USER_SESSIONS.get(phone_or_handle, {})
-    deal_id = session_before.get("deal_id")
+    # 3. Retrieve active deal_id from session *after* execution
+    session_after = USER_SESSIONS.get(phone_or_handle, {})
+    deal_id = session_after.get("deal_id")
     if not deal_id:
         user_db = db.query(User).filter(User.phone_or_handle == phone_or_handle).first()
         if user_db:
@@ -128,18 +141,6 @@ def dialogue_chat_simulator(
             ).order_by(Deal.created_at.desc()).first()
             if latest_deal and latest_deal.status not in [DealStatus.COMPLETED, DealStatus.REFUNDED, DealStatus.CANCELLED]:
                 deal_id = latest_deal.id
-
-    bot_reply = ChatBotService.process_message(
-        db=db,
-        platform=plat_enum,
-        phone_or_handle=phone_or_handle,
-        text=message,
-        media_url=media_url
-    )
-
-    # If still not found, check if process_message just created/linked a new deal
-    if not deal_id:
-        deal_id = USER_SESSIONS.get(phone_or_handle, {}).get("deal_id")
 
     # Save Bot reply to chat logs using the computed deal_id
     if deal_id and bot_reply:
@@ -161,13 +162,18 @@ def dialogue_chat_simulator(
             db.add(chat_log)
             db.commit()
     
-    return {
+    reply_data = {
         "user": phone_or_handle,
         "message": message,
         "reply": bot_reply,
         "session_state": USER_SESSIONS.get(phone_or_handle, {}).get("state"),
         "deal_id": USER_SESSIONS.get(phone_or_handle, {}).get("deal_id")
     }
+    
+    # Cache for idempotency checks
+    LAST_PROCESSED_MESSAGES[phone_or_handle] = (now, message, reply_data)
+    
+    return reply_data
 
 @app.get("/api/users/{user_identifier}/profile")
 def get_user_public_profile(user_identifier: str, db: Session = Depends(get_db)):
