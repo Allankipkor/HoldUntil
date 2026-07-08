@@ -706,3 +706,68 @@ def test_dispute_outcomes_in_positive_rate(db_session):
     # Positive rate: 2/3 = 66.67%
     summary = RatingService.get_profile_summary(db_session, user)
     assert summary["positive_rate"] == 66.67
+
+def test_dispute_auto_assignment_and_reminders(db_session):
+    """Test staff auto-assignment with load balancing, arbitrator re-roll constraint, and proactive reminders."""
+    from backend.app.models import User, UserRole, Dispute, DisputeTier
+    from backend.app.services.chat_bot import ChatBotService
+    from backend.app.services.scheduler import run_tier_1_checks
+    
+    # 1. Create two Mediators
+    med1 = User(phone_or_handle="MED_TEST_1", role=UserRole.MODERATOR, platform=PlatformType.WHATSAPP)
+    med2 = User(phone_or_handle="MED_TEST_2", role=UserRole.MODERATOR, platform=PlatformType.WHATSAPP)
+    db_session.add_all([med1, med2])
+    db_session.commit()
+    
+    # Give MED_TEST_1 an open dispute (high load)
+    d_load = Dispute(deal_id="deal_load", filed_by="user_x", reason="Load", tier=DisputeTier.TIER_2_AI, human_moderator_id=med1.id)
+    db_session.add(d_load)
+    db_session.commit()
+    
+    # 2. Trigger auto-assignment for a new dispute
+    d_new = Dispute(deal_id="deal_new", filed_by="user_y", reason="New case", tier=DisputeTier.TIER_2_AI)
+    db_session.add(d_new)
+    db_session.commit()
+    
+    ChatBotService.auto_assign_mediator(db_session, d_new)
+    
+    # It should assign to med2 because med2 has 0 open cases, while med1 has 1 open case
+    assert d_new.human_moderator_id == med2.id
+    
+    # 3. Create two Arbitrators
+    arb1 = User(phone_or_handle="ARB_TEST_1", role=UserRole.ARBITRATOR, platform=PlatformType.WHATSAPP)
+    arb2 = User(phone_or_handle="ARB_TEST_2", role=UserRole.ARBITRATOR, platform=PlatformType.WHATSAPP)
+    db_session.add_all([arb1, arb2])
+    db_session.commit()
+    
+    # Re-roll constraint: if original mediator is ARB_TEST_1 (say mediator.id == arb1.id),
+    # then it must assign to arb2.
+    d_appeal = Dispute(deal_id="deal_appeal", filed_by="user_z", reason="Appeal case", tier=DisputeTier.TIER_2_AI, human_moderator_id=arb1.id)
+    db_session.add(d_appeal)
+    db_session.commit()
+    
+    ChatBotService.auto_assign_arbitrator(db_session, d_appeal)
+    
+    # It should filter out arb1 (matching human_moderator_id) and assign to arb2
+    assert d_appeal.assigned_arbitrator_id == arb2.id
+    
+    # 4. Proactive reminders verification
+    # Setup a dispute that is resolved but within the appeal window
+    from datetime import datetime, UTC, timedelta
+    d_rem = Dispute(
+        deal_id="deal_rem",
+        filed_by=med1.id,
+        reason="Resolved",
+        tier=DisputeTier.TIER_3_HUMAN,
+        resolved_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=8), # > 7.5s ago
+        appeal_reminder_sent=False
+    )
+    db_session.add(d_rem)
+    db_session.commit()
+    
+    # Run the scheduler checks
+    run_tier_1_checks(db_session)
+    db_session.refresh(d_rem)
+    
+    # The reminder should have fired and marked appeal_reminder_sent = True
+    assert d_rem.appeal_reminder_sent is True

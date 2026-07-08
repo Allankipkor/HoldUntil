@@ -29,6 +29,84 @@ class ChatBotService:
         return user
 
     @classmethod
+    def auto_assign_mediator(cls, db: Session, dispute) -> str:
+        """
+        Automatically assign a Mediator (MODERATOR role) to the dispute
+        using least-open-cases load balancing.
+        """
+        from backend.app.models import User, UserRole, Dispute
+        # Query all mediators
+        mediators = db.query(User).filter(User.role == UserRole.MODERATOR).all()
+        if not mediators:
+            logger.warning("No staff with MODERATOR role found for auto-assignment.")
+            # Fallback to any admin
+            admins = db.query(User).filter(User.role == UserRole.ADMIN).all()
+            if admins:
+                mediators = admins
+            else:
+                return None
+        
+        # Count open first-instance disputes for each mediator
+        mediator_loads = []
+        for m in mediators:
+            open_count = db.query(Dispute).filter(
+                Dispute.human_moderator_id == m.id,
+                Dispute.resolved_at == None,
+                Dispute.is_appeal == False
+            ).count()
+            mediator_loads.append((open_count, m.id))
+            
+        # Select mediator with least open cases
+        mediator_loads.sort() # Sorts by count, then mediator id
+        assigned_id = mediator_loads[0][1]
+        dispute.human_moderator_id = assigned_id
+        db.commit()
+        logger.info(f"Automatically assigned dispute {dispute.id} to Mediator {assigned_id}")
+        return assigned_id
+
+    @classmethod
+    def auto_assign_arbitrator(cls, db: Session, dispute) -> str:
+        """
+        Automatically assign an Arbitrator (ARBITRATOR role) to the appeal dispute
+        using least-open-cases load balancing, ensuring they are different from the original mediator.
+        """
+        from backend.app.models import User, UserRole, Dispute
+        # Query all arbitrators
+        arbitrators = db.query(User).filter(User.role == UserRole.ARBITRATOR).all()
+        # Filter out the first-instance mediator
+        valid_arbitrators = [a for a in arbitrators if a.id != dispute.human_moderator_id and a.phone_or_handle != dispute.human_moderator_id]
+        
+        if not valid_arbitrators:
+            logger.warning("No staff with ARBITRATOR role (excluding original mediator) found for auto-appeal-assignment.")
+            # Fallback to admins (excluding original mediator)
+            admins = db.query(User).filter(User.role == UserRole.ADMIN).all()
+            valid_arbitrators = [a for a in admins if a.id != dispute.human_moderator_id and a.phone_or_handle != dispute.human_moderator_id]
+            
+            if not valid_arbitrators:
+                # If still no staff found, just use any arbitrator/admin
+                valid_arbitrators = db.query(User).filter(User.role.in_([UserRole.ARBITRATOR, UserRole.ADMIN])).all()
+                if not valid_arbitrators:
+                    return None
+                    
+        # Count open appeals for each arbitrator
+        arbitrator_loads = []
+        for a in valid_arbitrators:
+            open_count = db.query(Dispute).filter(
+                Dispute.assigned_arbitrator_id == a.id,
+                Dispute.resolved_at == None,
+                Dispute.is_appeal == True
+            ).count()
+            arbitrator_loads.append((open_count, a.id))
+            
+        # Select arbitrator with least open appeals
+        arbitrator_loads.sort()
+        assigned_id = arbitrator_loads[0][1]
+        dispute.assigned_arbitrator_id = assigned_id
+        db.commit()
+        logger.info(f"Automatically assigned appeal dispute {dispute.id} to Arbitrator {assigned_id}")
+        return assigned_id
+
+    @classmethod
     def process_message(cls, db: Session, platform: PlatformType, phone_or_handle: str, text: str, media_url: str = None) -> str:
         """
         Main entry point for incoming messages.
@@ -161,6 +239,8 @@ class ChatBotService:
             dispute.resolved_at = None  # Re-open for human review!
             dispute.tier = DisputeTier.TIER_3_HUMAN
             db.commit()
+            
+            cls.auto_assign_arbitrator(db, dispute)
             
             # Notify other party
             other_phone = latest_deal.seller.phone_or_handle if user.id == latest_deal.buyer_id else latest_deal.buyer.phone_or_handle
@@ -650,6 +730,7 @@ class ChatBotService:
                     except Exception as ai_err:
                         logger.error(f"AI moderation trigger error: {ai_err}")
 
+                    cls.auto_assign_mediator(db, dispute)
                     return "Thank you. Your dispute statement has been recorded. Our AI Moderator is analyzing the deal transcript and evidence..."
 
         return f"HoldUntil Escrow Bot. Type 'SELL' to start a new transaction, or 'HELP' for instructions."

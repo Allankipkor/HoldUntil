@@ -127,12 +127,40 @@ def run_tier_1_checks(db: Session):
 
     # Rule 3: Processing first-instance resolved disputes after appeal window
     from backend.app.config import settings
-    # Sandbox uses 15 seconds, production uses 5 days
+    # Sandbox uses 15 seconds, production uses APPEAL_WINDOW_HOURS
     if settings.SIMULATION_MODE:
         appeal_limit = now - timedelta(seconds=15)
+        reminder_limit = now - timedelta(seconds=7.5)
     else:
-        appeal_limit = now - timedelta(days=5)
+        appeal_window_hours = getattr(settings, "APPEAL_WINDOW_HOURS", 72)
+        appeal_limit = now - timedelta(hours=appeal_window_hours)
+        reminder_limit = now - timedelta(hours=appeal_window_hours / 2.0)
 
+    # 3.1 Send Proactive Reminders at halfway mark
+    pending_reminders = db.query(Dispute).filter(
+        Dispute.resolved_at != None,
+        Dispute.resolved_at < reminder_limit,
+        Dispute.is_appeal == False,
+        Dispute.filer_satisfied == None,
+        Dispute.appeal_reminder_sent == False
+    ).all()
+
+    for d in pending_reminders:
+        d.appeal_reminder_sent = True
+        db.commit()
+        
+        # Send reminder message to the filer
+        from backend.app.models import PlatformType
+        remaining_hours = int(getattr(settings, "APPEAL_WINDOW_HOURS", 72) / 2.0)
+        reminder_msg = f"Reminder: You have {remaining_hours} hours remaining to appeal this decision if you disagree. Reply APPEAL to request a senior review (KES 200 fee applies)."
+        
+        MetaService.send_text_message(
+            db, PlatformType.WHATSAPP, d.filer.phone_or_handle,
+            reminder_msg, d.deal_id
+        )
+        logger.info(f"Sent proactive appeal reminder for Dispute {d.id} to user {d.filer.phone_or_handle}")
+
+    # 3.2 Process lapsed appeal windows
     pending_releases = db.query(Dispute).filter(
         Dispute.resolved_at != None,
         Dispute.resolved_at < appeal_limit,

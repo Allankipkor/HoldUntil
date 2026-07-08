@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     ESCALATION_LIMIT_PER_USER_PER_MONTH: int = 2
     ESCALATION_FEE_KES: float = 200.0  # escalation fee (refundable on overturn)
     DELIVERY_GRACE_PERIOD_HOURS: int = 48  # time buyer has to confirm delivery
+    APPEAL_WINDOW_HOURS: int = 72  # hours buyer/seller has to file an appeal
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

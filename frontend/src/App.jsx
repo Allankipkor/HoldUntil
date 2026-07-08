@@ -55,7 +55,8 @@ export default function App() {
   const [usersLoading, setUsersLoading] = useState(false);
   const [systemSettings, setSystemSettings] = useState({
     MIN_TRADES_FOR_PROFILE_STATS: 3,
-    MIN_DEALS_FOR_BADGE: 10
+    MIN_DEALS_FOR_BADGE: 10,
+    APPEAL_WINDOW_HOURS: 72
   });
   const [settingsLoading, setSettingsLoading] = useState(false);
 
@@ -73,11 +74,43 @@ export default function App() {
     if (activeTab === 'moderator') {
       fetchDisputes();
       fetchMetrics();
+      fetchUsers();
     } else if (activeTab === 'admin') {
       fetchUsers();
       fetchSettings();
     }
   }, [activeTab]);
+
+  // Synchronize resolver preselection dynamically
+  useEffect(() => {
+    if (!selectedDisputeId) return;
+    const activeDispute = disputes.find(d => d.id === selectedDisputeId);
+    if (!activeDispute) return;
+    
+    const isAppeal = activeDispute.is_appeal || false;
+    let targetResolverId = isAppeal ? activeDispute.assigned_arbitrator_id : activeDispute.human_moderator_id;
+    
+    if (!targetResolverId) {
+      const filteredStaff = (users.length > 0 ? users : [
+        { id: "MOD_1", phone_or_handle: "MOD_1", role: "moderator" },
+        { id: "ARB_1", phone_or_handle: "ARB_1", role: "arbitrator" },
+        { id: "ADMIN_1", phone_or_handle: "ADMIN_1", role: "admin" }
+      ]).filter(u => {
+        if (isAppeal) {
+          return u.role === 'arbitrator' || u.role === 'admin';
+        } else {
+          return u.role === 'moderator' || u.role === 'admin';
+        }
+      });
+      if (filteredStaff.length > 0) {
+        targetResolverId = filteredStaff[0].id;
+      }
+    }
+    
+    if (targetResolverId) {
+      setResolverId(targetResolverId);
+    }
+  }, [selectedDisputeId, disputes, users]);
 
   const fetchMetrics = async () => {
     try {
@@ -168,6 +201,7 @@ export default function App() {
       const formData = new FormData();
       formData.append("min_trades", systemSettings.MIN_TRADES_FOR_PROFILE_STATS);
       formData.append("min_deals_for_badge", systemSettings.MIN_DEALS_FOR_BADGE);
+      formData.append("appeal_window_hours", systemSettings.APPEAL_WINDOW_HOURS || 72);
       
       const res = await fetch('/api/dashboard/settings', {
         method: 'POST',
@@ -1680,15 +1714,35 @@ export default function App() {
                       <form onSubmit={handleResolveDispute} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                         <div>
                           <label style={{ fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>Assign Staff User (Resolver Role Check)</label>
-                          <select 
-                            value={resolverId} 
-                            onChange={(e) => setResolverId(e.target.value)}
-                            className="form-input"
-                          >
-                            <option value="MOD_1">MOD_1 (Mediator role - first-instance only)</option>
-                            <option value="ARB_1">ARB_1 (Arbitrator role - can resolve appeals)</option>
-                            <option value="ADMIN_1">ADMIN_1 (Admin role - super permissions)</option>
-                          </select>
+                          {(() => {
+                            const activeDispute = disputes.find(d => d.id === selectedDisputeId);
+                            const isAppeal = activeDispute?.is_appeal || false;
+                            const filteredStaff = (users.length > 0 ? users : [
+                              { id: "MOD_1", phone_or_handle: "MOD_1", role: "moderator" },
+                              { id: "ARB_1", phone_or_handle: "ARB_1", role: "arbitrator" },
+                              { id: "ADMIN_1", phone_or_handle: "ADMIN_1", role: "admin" }
+                            ]).filter(u => {
+                              if (isAppeal) {
+                                return u.role === 'arbitrator' || u.role === 'admin';
+                              } else {
+                                return u.role === 'moderator' || u.role === 'admin';
+                              }
+                            });
+
+                            return (
+                              <select 
+                                value={resolverId} 
+                                onChange={(e) => setResolverId(e.target.value)}
+                                className="form-input"
+                              >
+                                {filteredStaff.map(u => (
+                                  <option key={u.id} value={u.id}>
+                                    {u.phone_or_handle} ({u.role.toUpperCase()})
+                                  </option>
+                                ))}
+                              </select>
+                            );
+                          })()}
                         </div>
 
                         <div>
@@ -1799,6 +1853,18 @@ export default function App() {
                       style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-muted)', color: 'white', fontSize: '1rem', fontWeight: 'bold', width: '100%', padding: '8px' }}
                     />
                     <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px' }}>Deals needed to unlock the [PRO] Verified Safe Seller badge.</p>
+                  </div>
+                  <div style={{ background: 'var(--bg-panel)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-muted)' }}>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>Appeal Window (Hours)</label>
+                    <input 
+                      type="number" 
+                      min="1"
+                      value={systemSettings.APPEAL_WINDOW_HOURS || 72} 
+                      onChange={(e) => setSystemSettings(prev => ({ ...prev, APPEAL_WINDOW_HOURS: parseInt(e.target.value) || 72 }))}
+                      className="form-input"
+                      style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-muted)', color: 'white', fontSize: '1rem', fontWeight: 'bold', width: '100%', padding: '8px' }}
+                    />
+                    <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px' }}>Hours allowed to file an appeal post first-instance decision.</p>
                   </div>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', alignItems: 'center' }}>

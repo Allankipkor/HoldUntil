@@ -131,6 +131,7 @@ def get_deal_detail(deal_id: str, db: Session = Depends(get_db)):
             "ai_reasoning": disp.ai_reasoning,
             "ai_confidence": disp.ai_confidence,
             "human_moderator_id": disp.human_moderator_id,
+            "assigned_arbitrator_id": disp.assigned_arbitrator_id,
             "escalation_requested_by": disp.escalation_requested_by,
             "escalation_fee_paid": disp.escalation_fee_paid,
             "final_outcome": disp.final_outcome,
@@ -182,7 +183,9 @@ def get_disputes_queue(db: Session = Depends(get_db)):
             "created_at": d.created_at,
             "sla_status": sla_status,
             "is_appeal": d.is_appeal,
-            "appeal_fee_refund_status": d.appeal_fee_refund_status
+            "appeal_fee_refund_status": d.appeal_fee_refund_status,
+            "human_moderator_id": d.human_moderator_id,
+            "assigned_arbitrator_id": d.assigned_arbitrator_id
         })
     return result
 
@@ -218,7 +221,7 @@ def resolve_dispute_manually(
     buyer = db.query(User).filter(User.id == deal.buyer_id).first()
     filer = db.query(User).filter(User.id == dispute.filed_by).first()
     
-    resolver = db.query(User).filter(User.id == resolver_id).first()
+    resolver = db.query(User).filter((User.id == resolver_id) | (User.phone_or_handle == resolver_id)).first()
     if not resolver:
         raise HTTPException(status_code=400, detail="Resolver user not found")
 
@@ -229,8 +232,10 @@ def resolve_dispute_manually(
         if resolver.role not in [UserRole.ARBITRATOR, UserRole.ADMIN]:
             raise HTTPException(status_code=403, detail="Only a distinct Arbitrator or Admin can resolve an appeal")
         
-        if dispute.human_moderator_id == resolver.id:
+        if dispute.human_moderator_id == resolver.id or dispute.human_moderator_id == resolver.phone_or_handle:
             raise HTTPException(status_code=400, detail="The Senior Arbitrator must be different from the first-instance Mediator")
+            
+        dispute.assigned_arbitrator_id = resolver.id
 
         from backend.app.models import ResolutionMethod
         first_instance_outcome = dispute.final_outcome
@@ -317,7 +322,7 @@ def resolve_dispute_manually(
             f"⚖️ Human Moderator Verdict: {outcome.upper()}.\n\n"
             f"Rationale: {reasoning}\n\n"
             f"If you believe there was a major error, you can request one final Appeal review by replying 'APPEAL' "
-            f"(KES 200.00 fee applies) within 5 business days (final within HoldUntil's internal dispute process).",
+            f"(KES 200.00 fee applies) within 3 days (final within HoldUntil's internal dispute process).",
             deal.id
         )
         MetaService.send_text_message(
@@ -349,24 +354,29 @@ def get_system_settings():
     """Retrieve global configuration/rules."""
     return {
         "MIN_TRADES_FOR_PROFILE_STATS": getattr(settings, "MIN_TRADES_FOR_PROFILE_STATS", 3),
-        "MIN_DEALS_FOR_BADGE": settings.MIN_DEALS_FOR_BADGE
+        "MIN_DEALS_FOR_BADGE": settings.MIN_DEALS_FOR_BADGE,
+        "APPEAL_WINDOW_HOURS": getattr(settings, "APPEAL_WINDOW_HOURS", 72)
     }
 
 @router.post("/settings")
 def update_system_settings(
     min_trades: int = Form(None),
-    min_deals_for_badge: int = Form(None)
+    min_deals_for_badge: int = Form(None),
+    appeal_window_hours: int = Form(None)
 ):
     """Admin-facing endpoint to update global configuration/rules."""
     if min_trades is not None:
         settings.MIN_TRADES_FOR_PROFILE_STATS = min_trades
     if min_deals_for_badge is not None:
         settings.MIN_DEALS_FOR_BADGE = min_deals_for_badge
+    if appeal_window_hours is not None:
+        settings.APPEAL_WINDOW_HOURS = appeal_window_hours
     return {
         "status": "success",
         "settings": {
             "MIN_TRADES_FOR_PROFILE_STATS": getattr(settings, "MIN_TRADES_FOR_PROFILE_STATS", 3),
-            "MIN_DEALS_FOR_BADGE": settings.MIN_DEALS_FOR_BADGE
+            "MIN_DEALS_FOR_BADGE": settings.MIN_DEALS_FOR_BADGE,
+            "APPEAL_WINDOW_HOURS": getattr(settings, "APPEAL_WINDOW_HOURS", 72)
         }
     }
 
@@ -808,12 +818,38 @@ def reset_sandbox_database(db: Session = Depends(get_db)):
     db.query(User).filter(User.id != SYSTEM_BOT_ID).delete()
     db.commit()
     
+    # Seed staff users
+    from backend.app.models import UserRole, PlatformType
+    staff = [
+        ("MOD_1", UserRole.MODERATOR),
+        ("ARB_1", UserRole.ARBITRATOR),
+        ("ADMIN_1", UserRole.ADMIN)
+    ]
+    for phone, role in staff:
+        exists = db.query(User).filter(User.phone_or_handle == phone).first()
+        if not exists:
+            user = User(
+                phone_or_handle=phone,
+                role=role,
+                platform=PlatformType.WHATSAPP,
+                trust_score=100.0
+            )
+            db.add(user)
+    db.commit()
+    
     # Wipe in-memory user sessions
     from backend.app.services.chat_bot import USER_SESSIONS, CLOSED_DEAL_SESSIONS
     USER_SESSIONS.clear()
     CLOSED_DEAL_SESSIONS.clear()
     
     return {"status": "success", "message": "Database and active sessions reset successfully."}
+
+@router.post("/simulation/trigger-scheduler")
+def trigger_simulated_scheduler(db: Session = Depends(get_db)):
+    """Simulate running the background scheduler tasks synchronously."""
+    from backend.app.services.scheduler import run_tier_1_checks
+    run_tier_1_checks(db)
+    return {"status": "success", "message": "Scheduler checks executed successfully."}
 
 @router.get("/metrics")
 def get_system_metrics(db: Session = Depends(get_db)):
