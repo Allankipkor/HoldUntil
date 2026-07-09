@@ -1226,6 +1226,7 @@ export default function App() {
                         >
                           📹 Initiate live in-app video call (Log proof)
                         </button>
+                      </div>
                     )}
 
                     {/* GALLERY SELECTION PANEL (COMMON FOR ALL TYPES) */}
