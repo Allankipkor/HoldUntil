@@ -83,6 +83,7 @@ class User(Base):
     deals_as_buyer = relationship("Deal", foreign_keys="Deal.buyer_id", back_populates="buyer")
     disputes_filed = relationship("Dispute", foreign_keys="Dispute.filed_by", back_populates="filer")
     evidence_submitted = relationship("Evidence", back_populates="submitter")
+    captured_photos = relationship("CapturedPhoto", back_populates="user", cascade="all, delete-orphan")
 
 class Deal(Base):
     __tablename__ = "deals"
@@ -228,3 +229,16 @@ class Rating(Base):
     deal = relationship("Deal")
     rater = relationship("User", foreign_keys=[rater_id])
     ratee = relationship("User", foreign_keys=[ratee_id], back_populates="ratings_received")
+
+class CapturedPhoto(Base):
+    __tablename__ = "captured_photos"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False)
+    file_url = Column(String(500), nullable=False)
+    captured_at = Column(DateTime, default=utcnow)
+    gps_location = Column(String(100), nullable=True)
+    perceptual_hash = Column(String(100), nullable=True, index=True)
+
+    # Relationships
+    user = relationship("User", back_populates="captured_photos")

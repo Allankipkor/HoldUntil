@@ -3,7 +3,7 @@ import {
   ShieldCheck, Smartphone, Gavel, Settings, Search, Send, 
   CheckCircle2, AlertTriangle, Trash2, UserCheck, RefreshCw, 
   FileText, Image, ArrowRight, Lock, PlusCircle, DollarSign, 
-  Truck, HelpCircle, ShieldAlert, Award
+  Truck, HelpCircle, ShieldAlert, Award, Camera
 } from 'lucide-react';
 
 const BACKEND_URL = ''; // Proxied via Vite
@@ -50,6 +50,14 @@ export default function App() {
   });
   const [showBuyerConfirmDeclaration, setShowBuyerConfirmDeclaration] = useState(false);
 
+  // Gallery & Camera State
+  const [galleryPhotos, setGalleryPhotos] = useState([]);
+  const [galleryLoading, setGalleryLoading] = useState(false);
+  const [gpsEnabled, setGpsEnabled] = useState(true);
+  const [cameraPhotoName, setCameraPhotoName] = useState('package_with_code.jpg');
+  const [selectedGalleryPhotoId, setSelectedGalleryPhotoId] = useState('');
+  const [evidenceSourceType, setEvidenceSourceType] = useState('live'); // 'live' or 'gallery'
+
   // Admin State
   const [users, setUsers] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
@@ -79,6 +87,12 @@ export default function App() {
     } else if (activeTab === 'admin') {
       fetchUsers();
       fetchSettings();
+    } else if (activeTab === 'gallery') {
+      fetchUsers();
+      fetchGallery();
+    } else if (activeTab === 'sandbox') {
+      fetchUsers();
+      fetchGallery();
     }
   }, [activeTab]);
 
@@ -193,6 +207,64 @@ export default function App() {
       console.warn("Failed to fetch settings from API.");
     } finally {
       setSettingsLoading(false);
+    }
+  };
+
+  const getSellerUser = () => {
+    return users.find(u => u.phone_or_handle === sellerPhone) || users[0] || { id: "usr_seller_1" };
+  };
+
+  const fetchGallery = async () => {
+    const seller = getSellerUser();
+    if (!seller || !seller.id) return;
+    setGalleryLoading(true);
+    try {
+      const res = await fetch(`/api/dashboard/gallery/${seller.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setGalleryPhotos(data);
+      }
+    } catch (e) {
+      console.warn("Failed to fetch gallery from API:", e);
+    } finally {
+      setGalleryLoading(false);
+    }
+  };
+
+  const handleCapturePhoto = async () => {
+    const seller = getSellerUser();
+    if (!seller || !seller.id) {
+      alert("Seller user not loaded yet!");
+      return;
+    }
+    
+    if (!cameraPhotoName.trim()) {
+      alert("Please specify a name for the captured photo!");
+      return;
+    }
+
+    try {
+      const formData = new FormData();
+      formData.append("user_id", seller.id);
+      formData.append("photo_name", cameraPhotoName);
+      if (gpsEnabled) {
+        formData.append("gps_location", "-1.2921, 36.8219");
+      }
+      
+      const res = await fetch('/api/dashboard/gallery/capture', {
+        method: 'POST',
+        body: formData
+      });
+
+      if (res.ok) {
+        alert("Photo captured successfully and added to your personal gallery!");
+        fetchGallery();
+      } else {
+        const txt = await res.text();
+        alert(`Failed to capture photo: ${txt}`);
+      }
+    } catch (e) {
+      alert(`Capture failed: ${e}`);
     }
   };
 
@@ -614,6 +686,9 @@ export default function App() {
       if (photoType) {
         formData.append("photo_name", photoType);
       }
+      if (options.gallery_photo_id) {
+        formData.append("gallery_photo_id", options.gallery_photo_id);
+      }
       formData.append("in_app_captured", inAppCaptured ? "true" : "false");
       formData.append("captured_timestamp", new Date().toISOString());
       if (options.gps_latitude) formData.append("gps_latitude", options.gps_latitude);
@@ -627,6 +702,7 @@ export default function App() {
       if (res.ok) {
         alert("Evidence Upload simulated!");
         fetchDealDetails(activeDealId);
+        fetchGallery();
       } else {
         const errText = await res.text();
         alert(`Failed to upload evidence: ${errText}`);
@@ -746,6 +822,9 @@ export default function App() {
           </button>
           <button onClick={() => setActiveTab('sandbox')} className={`btn ${activeTab === 'sandbox' ? 'btn-primary' : 'btn-secondary'}`}>
             <Smartphone size={16} /> Chat Sandbox
+          </button>
+          <button onClick={() => setActiveTab('gallery')} className={`btn ${activeTab === 'gallery' ? 'btn-primary' : 'btn-secondary'}`}>
+            <Camera size={16} /> In-App Gallery
           </button>
           <button onClick={() => setActiveTab('moderator')} className={`btn ${activeTab === 'moderator' ? 'btn-primary' : 'btn-secondary'}`}>
             <Gavel size={16} /> Disputes Queue {disputes.length > 0 && <span style={{ background: 'var(--accent-red)', color: 'white', padding: '2px 6px', borderRadius: '50%', fontSize: '10px', marginLeft: '4px' }}>{disputes.length}</span>}
@@ -1147,8 +1226,46 @@ export default function App() {
                         >
                           📹 Initiate live in-app video call (Log proof)
                         </button>
-                      </div>
                     )}
+
+                    {/* GALLERY SELECTION PANEL (COMMON FOR ALL TYPES) */}
+                    <div style={{ marginTop: '12px', borderTop: '1px dashed rgba(255,255,255,0.1)', paddingTop: '12px' }}>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>OR SELECT FROM IN-APP GALLERY</span>
+                      {galleryPhotos.length === 0 ? (
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', padding: '6px', background: 'rgba(255,255,255,0.02)', borderRadius: '4px', textAlign: 'center' }}>
+                          No captured photos found. Go to the "In-App Gallery" tab to snap a live photo first.
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <select 
+                            value={selectedGalleryPhotoId} 
+                            onChange={(e) => setSelectedGalleryPhotoId(e.target.value)} 
+                            className="form-input"
+                            style={{ fontSize: '0.75rem', padding: '4px', width: '100%', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-muted)', color: 'white' }}
+                          >
+                            <option value="">-- Choose Photo from Gallery --</option>
+                            {galleryPhotos.map(p => (
+                              <option key={p.id} value={p.id}>
+                                {p.file_url.split('/').pop()} ({p.perceptual_hash.substring(0, 10)})
+                              </option>
+                            ))}
+                          </select>
+                          <button 
+                            onClick={() => {
+                              if (!selectedGalleryPhotoId) {
+                                alert("Please select a photo first!");
+                                return;
+                              }
+                              handleSimulateUpload(null, { gallery_photo_id: selectedGalleryPhotoId });
+                            }} 
+                            className="btn btn-primary" 
+                            style={{ padding: '6px', fontSize: '0.75rem', fontWeight: 'bold' }}
+                          >
+                            📤 Submit Selected Gallery Photo
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -1488,6 +1605,181 @@ export default function App() {
                   </div>
                 )}
               </div>
+          </div>
+
+          </div>
+        )}
+
+        {/* IN-APP CAMERA & GALLERY */}
+        {activeTab === 'gallery' && (
+          <div style={{ maxWidth: '1000px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            
+            {/* Camera Controls Panel */}
+            <div className="glass-card" style={{ padding: '24px' }}>
+              <h2 style={{ fontSize: '1.5rem', marginBottom: '8px', fontFamily: 'var(--font-display)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Camera size={24} color="var(--primary)" /> Persistent In-App Camera Simulator
+              </h2>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '20px' }}>
+                Capture live photo evidence directly through HoldUntil's secure app container. Photos captured here are stored directly in your secure sandbox user gallery and stamped with permanent metadata.
+              </p>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                {/* Simulated Viewfinder */}
+                <div style={{ 
+                  background: '#070a0e', 
+                  borderRadius: '12px', 
+                  border: '1px solid var(--border-muted)', 
+                  display: 'flex', 
+                  flexDirection: 'column', 
+                  justifyContent: 'center', 
+                  alignItems: 'center', 
+                  aspectRatio: '16/9', 
+                  position: 'relative',
+                  overflow: 'hidden'
+                }}>
+                  <div style={{ position: 'absolute', top: '10px', left: '10px', display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(0,0,0,0.5)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.7rem', color: '#10b981' }}>
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', display: 'inline-block' }}></span> LIVE VIEW
+                  </div>
+                  <Smartphone size={40} color="var(--text-muted)" style={{ opacity: 0.3, marginBottom: '10px' }} />
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Camera Viewfinder (Click capture to store photo)</span>
+                  {gpsEnabled && (
+                    <div style={{ position: 'absolute', bottom: '10px', right: '10px', background: 'rgba(0,0,0,0.5)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.7rem', color: 'var(--primary)' }}>
+                      📍 GPS Enabled: -1.2921, 36.8219
+                    </div>
+                  )}
+                </div>
+
+                {/* Settings & Capturing Controls */}
+                <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <div>
+                      <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>SELECT PHOTO TEMPLATE / PRESET</label>
+                      <select 
+                        value={cameraPhotoName}
+                        onChange={(e) => setCameraPhotoName(e.target.value)}
+                        className="form-input"
+                        style={{ width: '100%', fontSize: '0.85rem' }}
+                      >
+                        <option value="package_with_code.jpg">package_with_code.jpg (Standard delivery check)</option>
+                        <option value="screenshot_proof.jpg">screenshot_proof.jpg (Digital proof)</option>
+                        <option value="handover_proof.jpg">handover_proof.jpg (Handoff proof)</option>
+                        <option value="FAIL_CODE_package.jpg">FAIL_CODE_package.jpg (Simulates wrong transaction code)</option>
+                        <option value="REUSE_ALERT_package.jpg">REUSE_ALERT_package.jpg (Simulates duplicate photo reuse)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '6px', fontWeight: 'bold' }}>CUSTOM PHOTO FILENAME (OPTIONAL)</label>
+                      <input 
+                        type="text" 
+                        value={cameraPhotoName}
+                        onChange={(e) => setCameraPhotoName(e.target.value)}
+                        placeholder="Enter file name (e.g. HU-D527_package.jpg)"
+                        className="form-input"
+                        style={{ width: '100%', fontSize: '0.85rem' }}
+                      />
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginTop: '4px' }}>
+                        To pass verification code checks, make sure your filename includes the active transaction's code (e.g. <b>{dealDetails?.deal?.verification_code}</b>).
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <input 
+                        type="checkbox" 
+                        id="gps_toggle" 
+                        checked={gpsEnabled} 
+                        onChange={(e) => setGpsEnabled(e.target.checked)} 
+                        style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                      />
+                      <label htmlFor="gps_toggle" style={{ fontSize: '0.85rem', cursor: 'pointer', userSelect: 'none' }}>
+                        Embed Mock GPS Metadata (Nairobi, Kenya)
+                      </label>
+                    </div>
+                  </div>
+
+                  <button 
+                    onClick={handleCapturePhoto} 
+                    className="btn btn-primary" 
+                    style={{ width: '100%', padding: '12px', fontSize: '0.95rem', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginTop: '20px' }}
+                  >
+                    <Camera size={18} /> Capture & Save to Personal Gallery
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Personal Gallery Grid */}
+            <div className="glass-card" style={{ padding: '24px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-muted)', paddingBottom: '12px', marginBottom: '16px' }}>
+                <h3 style={{ fontSize: '1.25rem', margin: 0 }}>Personal HoldUntil Gallery</h3>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                  🔒 Sandbox User: <b>{getSellerUser().phone_or_handle}</b> | <b>{galleryPhotos.length}</b> Photos Saved
+                </span>
+              </div>
+
+              <div style={{ 
+                background: 'rgba(239,68,68,0.05)', 
+                border: '1px dashed rgba(239,68,68,0.3)', 
+                padding: '12px', 
+                borderRadius: '8px', 
+                fontSize: '0.75rem', 
+                color: 'var(--text-muted)', 
+                marginBottom: '20px' 
+              }}>
+                ℹ️ <b>Security Sandbox Protection:</b> This gallery represents the user's isolated in-app photo vault. Native camera roll imports are prohibited to prevent photoshop tampering and pre-recorded fraud. Only photos captured directly using HoldUntil's persistent in-app camera can be added.
+              </div>
+
+              {galleryLoading ? (
+                <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem', padding: '40px' }}>Loading gallery photos...</p>
+              ) : galleryPhotos.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
+                  <Smartphone size={32} style={{ opacity: 0.2, margin: '0 auto 8px auto' }} />
+                  <p style={{ margin: 0, fontSize: '0.85rem' }}>Your personal gallery is empty.</p>
+                  <p style={{ margin: '4px 0 0 0', fontSize: '0.75rem' }}>Capture your first photo above!</p>
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '16px' }}>
+                  {galleryPhotos.map((photo) => (
+                    <div 
+                      key={photo.id} 
+                      className="glass-card" 
+                      style={{ 
+                        overflow: 'hidden', 
+                        border: '1px solid var(--border-muted)', 
+                        background: 'rgba(255,255,255,0.01)',
+                        display: 'flex',
+                        flexDirection: 'column'
+                      }}
+                    >
+                      <div style={{ position: 'relative', aspectRatio: '4/3', background: '#070a0e', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                        <Image size={24} style={{ opacity: 0.15 }} />
+                        <div style={{ 
+                          position: 'absolute', 
+                          top: 0, left: 0, right: 0, bottom: 0, 
+                          backgroundImage: `url(${photo.file_url})`, 
+                          backgroundSize: 'cover', 
+                          backgroundPosition: 'center' 
+                        }}></div>
+                      </div>
+                      
+                      <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'white' }} title={photo.file_url.split('/').pop()}>
+                          📄 {photo.file_url.split('/').pop()}
+                        </div>
+                        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                          📅 Captured: {new Date(photo.captured_at).toLocaleString()}
+                        </div>
+                        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                          📍 GPS: {photo.gps_location || 'Not Granted'}
+                        </div>
+                        <div style={{ fontSize: '0.65rem', color: 'var(--secondary)', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          🔑 pHash: {photo.perceptual_hash}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
           </div>

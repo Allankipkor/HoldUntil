@@ -890,3 +890,97 @@ def test_response_window_flow_evidence_before_review(db_session):
     assert dispute.response_statement == "I sent a working device."
     assert dispute.response_window_deadline is None
     assert dispute.human_moderator_id is not None
+
+def test_photo_reuse_across_deals(db_session):
+    """Verify that using the same gallery-captured photo across two different deals triggers the reuse fraud warning."""
+    from backend.app.models import User, Deal, DealStatus, CapturedPhoto, Evidence, Dispute, DisputeTier
+    from backend.app.routes.dashboard import upload_simulated_evidence
+    from backend.app.services.ai_service import AIService
+    from datetime import datetime, UTC
+    
+    # 1. Setup Deal 1 & Deal 2
+    seller = User(phone_or_handle="254799000001", platform="whatsapp")
+    buyer = User(phone_or_handle="254799000002", platform="whatsapp")
+    db_session.add_all([seller, buyer])
+    db_session.commit()
+    
+    deal1 = Deal(seller_id=seller.id, buyer_id=buyer.id, item_description="Device A", agreed_price=100.0, status=DealStatus.FUNDED, verification_code="HU-1111")
+    deal2 = Deal(seller_id=seller.id, buyer_id=buyer.id, item_description="Device B", agreed_price=200.0, status=DealStatus.FUNDED, verification_code="HU-2222")
+    db_session.add_all([deal1, deal2])
+    db_session.commit()
+    
+    # 2. Capture a photo to the gallery
+    photo = CapturedPhoto(
+        user_id=seller.id,
+        file_url="/simulated/media/HU-1111_package.jpg",
+        gps_location="-1.2921, 36.8219",
+        perceptual_hash="1f2f3f4f5f6f7f8f",
+        captured_at=datetime.now(UTC).replace(tzinfo=None)
+    )
+    db_session.add(photo)
+    db_session.commit()
+    
+    # 3. Submit as evidence for Deal 1 (gallery-selected)
+    upload_simulated_evidence(deal_id=deal1.id, sender_id=seller.id, gallery_photo_id=photo.id, db=db_session)
+    
+    # 4. Submit the SAME photo as evidence for Deal 2 (gallery-selected)
+    upload_simulated_evidence(deal_id=deal2.id, sender_id=seller.id, gallery_photo_id=photo.id, db=db_session)
+    
+    # 5. Verify that Deal 2's evidence is logged with the same hash
+    evs = db_session.query(Evidence).filter(Evidence.deal_id == deal2.id).all()
+    assert len(evs) == 1
+    assert evs[0].perceptual_hash == "1f2f3f4f5f6f7f8f"
+    
+    # 6. File dispute for Deal 2 and run AI Moderation to trigger the reuse check
+    dispute = Dispute(deal_id=deal2.id, filed_by=buyer.id, reason="Item never arrived", tier=DisputeTier.TIER_2_AI)
+    db_session.add(dispute)
+    db_session.commit()
+    
+    AIService.run_moderation(db_session, dispute.id)
+    
+    # Refresh evidence and check for the WARNING tag in the hash!
+    db_session.refresh(evs[0])
+    assert "WARNING" in evs[0].perceptual_hash
+    assert "Reused!" in evs[0].perceptual_hash
+
+def test_gallery_old_photo_code_mismatch(db_session):
+    """Verify that a gallery-selected photo submitted for a deal requires the current verification code to pass verification checks."""
+    from backend.app.models import User, Deal, DealStatus, CapturedPhoto, Evidence
+    from backend.app.routes.dashboard import upload_simulated_evidence
+    from datetime import datetime, UTC
+    
+    seller = User(phone_or_handle="254799000003", platform="whatsapp")
+    buyer = User(phone_or_handle="254799000004", platform="whatsapp")
+    db_session.add_all([seller, buyer])
+    db_session.commit()
+    
+    # Deal A requires "HU-AAAA", Deal B requires "HU-BBBB"
+    deal_a = Deal(seller_id=seller.id, buyer_id=buyer.id, item_description="Laptop A", agreed_price=100.0, status=DealStatus.FUNDED, verification_code="HU-AAAA")
+    deal_b = Deal(seller_id=seller.id, buyer_id=buyer.id, item_description="Laptop B", agreed_price=200.0, status=DealStatus.FUNDED, verification_code="HU-BBBB")
+    db_session.add_all([deal_a, deal_b])
+    db_session.commit()
+    
+    # 1. Capture a photo matching Deal A's code to the gallery
+    photo = CapturedPhoto(
+        user_id=seller.id,
+        file_url="/simulated/media/HU-AAAA_package.jpg",
+        gps_location="-1.2921, 36.8219",
+        perceptual_hash="hash_unique_1111",
+        captured_at=datetime.now(UTC).replace(tzinfo=None)
+    )
+    db_session.add(photo)
+    db_session.commit()
+    
+    # 2. Submit for Deal B (which requires "HU-BBBB") -> should fail code visibility check!
+    upload_simulated_evidence(deal_id=deal_b.id, sender_id=seller.id, gallery_photo_id=photo.id, db=db_session)
+    
+    evs_b = db_session.query(Evidence).filter(Evidence.deal_id == deal_b.id).all()
+    assert len(evs_b) == 1
+    assert evs_b[0].dynamic_code_detected is False
+    
+    # 3. Submit for Deal A (which requires "HU-AAAA") -> should succeed code visibility check!
+    upload_simulated_evidence(deal_id=deal_a.id, sender_id=seller.id, gallery_photo_id=photo.id, db=db_session)
+    
+    evs_a = db_session.query(Evidence).filter(Evidence.deal_id == deal_a.id).all()
+    assert len(evs_a) == 1
+    assert evs_a[0].dynamic_code_detected is True

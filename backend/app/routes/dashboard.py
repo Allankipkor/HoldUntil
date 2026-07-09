@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, Query, UploadFi
 from sqlalchemy.orm import Session
 from backend.app.database import get_db
 from backend.app.config import settings
-from backend.app.models import Deal, DealStatus, User, UserRole, Dispute, DisputeTier, OutcomeType, Evidence, ChatLog, Payment, PaymentStatus, PlatformType
+from backend.app.models import Deal, DealStatus, User, UserRole, Dispute, DisputeTier, OutcomeType, Evidence, ChatLog, Payment, PaymentStatus, PlatformType, CapturedPhoto
 from backend.app.services.daraja_service import DarajaService
 from backend.app.services.meta_service import MetaService, SYSTEM_BOT_ID
 from backend.app.services.image_service import ImageService
@@ -628,6 +628,7 @@ def upload_simulated_evidence(
     deal_id: str = Form(...),
     sender_id: str = Form(...),
     photo_name: str = Form(None), # e.g. "package_with_code.jpg" or "FAIL_CODE" to test code failure
+    gallery_photo_id: str = Form(None),
     in_app_captured: bool = Form(False),
     captured_timestamp: str = Form(None),
     gps_latitude: float = Form(None),
@@ -643,6 +644,8 @@ def upload_simulated_evidence(
     from fastapi.params import Form as FormParam
     if isinstance(photo_name, FormParam):
         photo_name = None
+    if isinstance(gallery_photo_id, FormParam):
+        gallery_photo_id = None
     if isinstance(in_app_captured, FormParam):
         in_app_captured = False
     if isinstance(captured_timestamp, FormParam):
@@ -662,48 +665,83 @@ def upload_simulated_evidence(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Reject photo/video if not captured through the in-app camera/video feature
-    # Exception: digital deliverable file itself
-    if photo_name and not in_app_captured:
-        raise HTTPException(
-            status_code=400,
-            detail="Evidence rejected: photos and videos must be captured live using the in-app camera."
-        )
-
-    # Generate mock perceptual hash and EXIF
-    phash = None
-    exif = None
-    if photo_name:
-        phash = f"hash_{uuid.uuid4().hex[:12]}"
-        if "REUSE" in photo_name.upper():
-            existing = db.query(Evidence).first()
-            phash = existing.perceptual_hash if existing else "hash_duplicate_reused_12345"
-
+    # If selected from gallery
+    if gallery_photo_id:
+        photo = db.query(CapturedPhoto).filter(CapturedPhoto.id == gallery_photo_id).first()
+        if not photo:
+            raise HTTPException(status_code=404, detail="Gallery photo not found")
+        
+        phash = photo.perceptual_hash
+        photo_name = os.path.basename(photo.file_url)
+        in_app_captured = True  # CapturedPhotos can only be made via in-app camera
+        
+        parsed_timestamp = photo.captured_at
+        if photo.gps_location:
+            try:
+                lat_str, lng_str = photo.gps_location.split(",")
+                gps_latitude = float(lat_str.strip())
+                gps_longitude = float(lng_str.strip())
+            except Exception:
+                pass
+                
         exif = {
             "Make": "Apple",
             "Model": "iPhone 13 Pro",
-            "DateTime": datetime.now(UTC).strftime("%Y:%m-%d %H:%M:%S"),
+            "DateTime": photo.captured_at.strftime("%Y-%m-%d %H:%M:%S"),
             "Software": "iOS 16.2",
             "GPSInfo": {"Latitude": gps_latitude or -1.2921, "Longitude": gps_longitude or 36.8219}
         }
+    else:
+        # Reject photo/video if not captured through the in-app camera/video feature
+        # Exception: digital deliverable file itself
+        if photo_name and not in_app_captured:
+            raise HTTPException(
+                status_code=400,
+                detail="Evidence rejected: photos and videos must be captured live using the in-app camera."
+            )
 
-        # Custom triggers
-        if "EXIF_FAIL" in photo_name.upper():
-            exif = {}
-        if "EXIF_FUTURE" in photo_name.upper():
-            exif["DateTime"] = "2028-10-10 12:00:00"
+        # Generate mock perceptual hash and EXIF
+        phash = None
+        exif = None
+        if photo_name:
+            phash = uuid.uuid4().hex[:16]
+            if "REUSE" in photo_name.upper():
+                existing = db.query(Evidence).filter(Evidence.perceptual_hash != None).first()
+                if not existing:
+                    existing = db.query(CapturedPhoto).filter(CapturedPhoto.perceptual_hash != None).first()
+                phash = existing.perceptual_hash if existing else "1f2f3f4f5f6f7f8f"
+
+            exif = {
+                "Make": "Apple",
+                "Model": "iPhone 13 Pro",
+                "DateTime": datetime.now(UTC).strftime("%Y:%m-%d %H:%M:%S"),
+                "Software": "iOS 16.2",
+                "GPSInfo": {"Latitude": gps_latitude or -1.2921, "Longitude": gps_longitude or 36.8219}
+            }
+
+            # Custom triggers
+            if "EXIF_FAIL" in photo_name.upper():
+                exif = {}
+            if "EXIF_FUTURE" in photo_name.upper():
+                exif["DateTime"] = "2028-10-10 12:00:00"
+
+        parsed_timestamp = datetime.now(UTC).replace(tzinfo=None)
+        if captured_timestamp:
+            try:
+                parsed_timestamp = datetime.fromisoformat(captured_timestamp.replace("Z", "+00:00")).replace(tzinfo=None)
+            except Exception:
+                pass
 
     # Code matching
     code_verified = False
-    if photo_name and deal.verification_code:
-        code_verified = ("FAIL_CODE" not in photo_name.upper())
-
-    parsed_timestamp = datetime.now(UTC).replace(tzinfo=None)
-    if captured_timestamp:
-        try:
-            parsed_timestamp = datetime.fromisoformat(captured_timestamp.replace("Z", "+00:00")).replace(tzinfo=None)
-        except Exception:
-            pass
+    check_name = photo_name or ""
+    if check_name and deal.verification_code:
+        if gallery_photo_id:
+            # Must strictly contain the transaction code
+            code_verified = (deal.verification_code.upper() in check_name.upper())
+        else:
+            # Live photo passes unless FAIL_CODE specified
+            code_verified = ("FAIL_CODE" not in check_name.upper())
 
     # Add evidence
     evidence = Evidence(
@@ -852,6 +890,7 @@ def reset_sandbox_database(db: Session = Depends(get_db)):
     db.query(Evidence).delete()
     db.query(ChatLog).delete()
     db.query(Rating).delete()
+    db.query(CapturedPhoto).delete()
     db.query(Deal).delete()
     db.query(User).filter(User.id != SYSTEM_BOT_ID).delete()
     db.commit()
@@ -945,3 +984,63 @@ def simulate_mpesa_b2c_callback(payment_ref: str = Form(...), db: Session = Depe
         deal.id
     )
     return {"status": "success", "type": "escrow_payout"}
+
+@router.post("/gallery/capture")
+def capture_in_app_photo(
+    user_id: str = Form(...),
+    photo_name: str = Form(...),
+    gps_location: str = Form(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Simulate capturing a photo via the persistently accessible in-app camera.
+    Saves the photo to the user's gallery with permanent metadata.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Generate permanent perceptual hash
+    phash = uuid.uuid4().hex[:16]
+    if "REUSE" in photo_name.upper():
+        existing = db.query(Evidence).filter(Evidence.perceptual_hash != None).first()
+        if not existing:
+            existing = db.query(CapturedPhoto).filter(CapturedPhoto.perceptual_hash != None).first()
+        phash = existing.perceptual_hash if existing else "1f2f3f4f5f6f7f8f"
+
+    file_url = f"/simulated/media/{photo_name}"
+    
+    photo = CapturedPhoto(
+        user_id=user.id,
+        file_url=file_url,
+        gps_location=gps_location,
+        perceptual_hash=phash,
+        captured_at=datetime.now(UTC).replace(tzinfo=None)
+    )
+    db.add(photo)
+    db.commit()
+    db.refresh(photo)
+
+    return {
+        "id": photo.id,
+        "user_id": photo.user_id,
+        "file_url": photo.file_url,
+        "captured_at": photo.captured_at,
+        "gps_location": photo.gps_location,
+        "perceptual_hash": photo.perceptual_hash
+    }
+
+@router.get("/gallery/{user_id}")
+def get_user_gallery(user_id: str, db: Session = Depends(get_db)):
+    """Retrieve all photos in a user's personal HoldUntil gallery."""
+    photos = db.query(CapturedPhoto).filter(CapturedPhoto.user_id == user_id).order_by(CapturedPhoto.captured_at.desc()).all()
+    return [
+        {
+            "id": p.id,
+            "user_id": p.user_id,
+            "file_url": p.file_url,
+            "captured_at": p.captured_at,
+            "gps_location": p.gps_location,
+            "perceptual_hash": p.perceptual_hash
+        } for p in photos
+    ]

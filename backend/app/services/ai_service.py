@@ -57,7 +57,12 @@ class AIService:
             
             reuse_flag = "No reuse flags"
             if reuse_matches:
-                reuse_flag = f"WARNING: Reused photo detected! Matches found in {len(reuse_matches)} other deals."
+                other_deal_matches = [m for m in reuse_matches if m["deal_id"] != deal.id]
+                if other_deal_matches:
+                    reuse_flag = f"WARNING: Reused photo detected! Matches found in {len(other_deal_matches)} other deals."
+                    if "WARNING" not in str(ev.perceptual_hash):
+                        ev.perceptual_hash = f"WARNING: Reused! {ev.perceptual_hash}"
+                        db.commit()
 
             # Check dynamic code verification code
             code_verified = False
