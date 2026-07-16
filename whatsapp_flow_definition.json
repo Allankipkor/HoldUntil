@@ -1,0 +1,96 @@
+{
+  "version": "3.1",
+  "screens": [
+    {
+      "id": "profile_creation",
+      "title": "Create Your Profile",
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "Form",
+            "name": "profile_form",
+            "children": [
+              {
+                "type": "TextInput",
+                "name": "name",
+                "label": "Your full name",
+                "required": true,
+                "helper-text": "We'll quietly check this matches your M-Pesa registration when you transact — this helps protect both buyers and sellers from impersonation."
+              },
+              {
+                "type": "TextInput",
+                "name": "recovery_contact",
+                "label": "Backup email or phone number",
+                "required": true,
+                "helper-text": "This protects you if you ever lose access to WhatsApp, Instagram, or Messenger — you'll still be able to manage your deals."
+              },
+              {
+                "type": "Dropdown",
+                "name": "location",
+                "label": "Your general location (optional)",
+                "required": false,
+                "helper-text": "Helps us match you with nearby local handoff deals. City or town is enough — no full address needed.",
+                "data-source": [
+                  {
+                    "title": "Nairobi",
+                    "id": "Nairobi"
+                  },
+                  {
+                    "title": "Mombasa",
+                    "id": "Mombasa"
+                  },
+                  {
+                    "title": "Kisumu",
+                    "id": "Kisumu"
+                  },
+                  {
+                    "title": "Nakuru",
+                    "id": "Nakuru"
+                  },
+                  {
+                    "title": "Eldoret",
+                    "id": "Eldoret"
+                  },
+                  {
+                    "title": "Other",
+                    "id": "Other"
+                  }
+                ]
+              },
+              {
+                "type": "TextBody",
+                "text": "Want faster trust with buyers? Complete 10 deals to unlock your Verified Seller badge.",
+                "style": "info"
+              },
+              {
+                "type": "CheckboxGroup",
+                "name": "consent",
+                "required": true,
+                "data-source": [
+                  {
+                    "id": "accepted",
+                    "title": "I understand that messages and evidence submitted in HoldUntil transactions may be reviewed to resolve disputes, and that providing false information may result in restricted access."
+                  }
+                ]
+              },
+              {
+                "type": "Footer",
+                "label": "Submit Profile",
+                "on-click-action": {
+                  "name": "submit",
+                  "payload": {
+                    "name": "${form.name}",
+                    "recovery_contact": "${form.recovery_contact}",
+                    "location": "${form.location}",
+                    "consent": "${form.consent}"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -37,6 +37,7 @@ def test_user_creation(db_session):
 def test_deal_creation_dialogue_flow(db_session):
     """Test the seller setup dialogue chain (SELL -> Desc -> Price -> Days)."""
     seller_phone = "254711111111"
+    ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, seller_phone)
     
     # Step 1: Initialize
     r1 = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "SELL")
@@ -71,6 +72,8 @@ def test_buyer_join_and_confirm(db_session):
     """Test buyer joining the deal draft via invite code and confirming terms."""
     seller_phone = "254711111111"
     buyer_phone = "254722222222"
+    ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, seller_phone)
+    ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, buyer_phone)
     
     # Setup deal first
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "SELL")
@@ -156,6 +159,7 @@ def test_ai_heuristics_dispute_resolution(db_session):
 def test_price_edit_and_cancel_commands(db_session):
     """Test updating the deal price and cancelling the session dialogue via command inputs."""
     seller_phone = "254711111111"
+    ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, seller_phone)
     
     # 1. Create a draft deal
     ChatBotService.process_message(db_session, PlatformType.WHATSAPP, seller_phone, "SELL")
@@ -984,3 +988,97 @@ def test_gallery_old_photo_code_mismatch(db_session):
     evs_a = db_session.query(Evidence).filter(Evidence.deal_id == deal_a.id).all()
     assert len(evs_a) == 1
     assert evs_a[0].dynamic_code_detected is True
+
+def test_first_time_user_onboarding_and_resume(db_session):
+    """Verify first-time user Flow onboarding, fallback, and automatic resume of the pending action."""
+    from backend.app.models import User, PlatformType
+    
+    new_phone = "254799888888"
+    
+    # 1. User messages SELL for the first time on WhatsApp
+    r1 = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, new_phone, "SELL")
+    assert "profile setup" in r1.lower()
+    assert USER_SESSIONS[new_phone]["state"] == "ONBOARDING_FLOW"
+    assert USER_SESSIONS[new_phone]["onboarding_pending_action"] == "SELL"
+    
+    # Verify user record is NOT created in DB yet
+    user_db = db_session.query(User).filter(User.phone_or_handle == new_phone).first()
+    assert user_db is None
+    
+    # 2. Simulate user typing a command or name (START) to switch to text fallback
+    r2 = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, new_phone, "START")
+    assert "full name" in r2.lower()
+    assert USER_SESSIONS[new_phone]["state"] == "ONBOARDING_FALLBACK_NAME"
+    
+    # 3. Enter Name
+    r3 = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, new_phone, "Allan Kip")
+    assert "backup email" in r3.lower()
+    assert USER_SESSIONS[new_phone]["state"] == "ONBOARDING_FALLBACK_RECOVERY"
+    assert USER_SESSIONS[new_phone]["onboarding_data"]["name"] == "Allan Kip"
+    
+    # 4. Enter Recovery
+    r4 = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, new_phone, "allan@example.com")
+    assert "location" in r4.lower()
+    assert USER_SESSIONS[new_phone]["state"] == "ONBOARDING_FALLBACK_LOCATION"
+    
+    # 5. Skip Location
+    r5 = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, new_phone, "skip")
+    assert "consent" in r5.lower()
+    assert USER_SESSIONS[new_phone]["state"] == "ONBOARDING_FALLBACK_CONSENT"
+    assert USER_SESSIONS[new_phone]["onboarding_data"]["location"] is None
+    
+    # 6. Agree to consent and assert original 'SELL' action is resumed!
+    r6 = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, new_phone, "YES")
+    assert "item description" in r6.lower() # Verify it welcomes user and prompts for description (resuming 'SELL')
+    
+    # Verify user is created in database with the fields
+    user_db = db_session.query(User).filter(User.phone_or_handle == new_phone).first()
+    assert user_db is not None
+    assert user_db.name == "Allan Kip"
+    assert user_db.recovery_email_or_phone == "allan@example.com"
+    assert user_db.location is None
+    assert user_db.consent_accepted_at is not None
+    
+    # Verify session is cleaned up and state is now description prompt
+    assert USER_SESSIONS[new_phone]["state"] == "AWAITING_DESC"
+
+def test_first_time_user_flow_json_submission(db_session):
+    """Verify first-time user Flow onboarding via simulated JSON payload and action resume."""
+    from backend.app.models import User, PlatformType, Deal
+    
+    new_phone = "254799777777"
+    
+    # 1. User messages a JOIN code for the first time
+    # Set up a deal first
+    seller = ChatBotService.get_or_create_user(db_session, PlatformType.WHATSAPP, "254711111111")
+    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, "254711111111", "SELL")
+    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, "254711111111", "iPhone X")
+    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, "254711111111", "30000")
+    ChatBotService.process_message(db_session, PlatformType.WHATSAPP, "254711111111", "3")
+    deal = db_session.query(Deal).filter(Deal.item_description == "iPhone X").first()
+    
+    join_cmd = f"JOIN_{deal.id}"
+    
+    r1 = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, new_phone, join_cmd)
+    assert "profile setup" in r1.lower()
+    assert USER_SESSIONS[new_phone]["state"] == "ONBOARDING_FLOW"
+    assert USER_SESSIONS[new_phone]["onboarding_pending_action"] == join_cmd
+    
+    # 2. Submit simulated Flow JSON
+    import json
+    flow_payload = {
+        "flow_name": "profile_creation",
+        "name": "Allan Kipkor",
+        "recovery_contact": "allankip@example.com",
+        "location": "Nairobi"
+    }
+    r2 = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, new_phone, json.dumps(flow_payload))
+    assert "welcome" in r2.lower()
+    assert "joining a secure" in r2.lower() # Verify it resumed the JOIN action
+    
+    # Verify user record
+    user_db = db_session.query(User).filter(User.phone_or_handle == new_phone).first()
+    assert user_db is not None
+    assert user_db.name == "Allan Kipkor"
+    assert user_db.recovery_email_or_phone == "allankip@example.com"
+    assert user_db.location == "Nairobi"

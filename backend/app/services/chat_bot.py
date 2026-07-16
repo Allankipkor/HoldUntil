@@ -107,13 +107,148 @@ class ChatBotService:
         return assigned_id
 
     @classmethod
+    def complete_onboarding(cls, db: Session, platform: PlatformType, phone_or_handle: str, data: dict) -> str:
+        """
+        Creates a new user in the database upon onboarding completion,
+        and resumes their original pending request.
+        """
+        from backend.app.models import UserRole
+        user = User(
+            platform=platform,
+            phone_or_handle=phone_or_handle,
+            name=data.get("name"),
+            recovery_email_or_phone=data.get("recovery_contact") or data.get("recovery_email_or_phone"),
+            location=data.get("location"),
+            consent_accepted_at=datetime.utcnow(),
+            role=UserRole.USER
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        logger.info(f"Onboarded new user: {phone_or_handle} (Name: {user.name})")
+
+        # Get session details and resume pending action
+        session = USER_SESSIONS.get(phone_or_handle, {})
+        pending_action = session.pop("onboarding_pending_action", None)
+        pending_media = session.pop("onboarding_pending_media", None)
+        session.pop("onboarding_data", None)
+        session["state"] = "IDLE"
+        session["deal_id"] = None
+
+        welcome_msg = f"🎉 Welcome to HoldUntil, {user.name}! Your profile has been successfully created.\n\n" \
+                      f"💡 *Want faster trust with buyers? Complete 10 deals to unlock your Verified Seller badge.*\n\n"
+        
+        if pending_action:
+            # Re-run dialogue process for the original message
+            resumed_reply = cls.process_message(db, platform, phone_or_handle, pending_action, pending_media)
+            return welcome_msg + resumed_reply
+        else:
+            return welcome_msg + "Type 'SELL' to start a new transaction, or 'HELP' for instructions."
+
+    @classmethod
     def process_message(cls, db: Session, platform: PlatformType, phone_or_handle: str, text: str, media_url: str = None) -> str:
         """
         Main entry point for incoming messages.
         Returns the bot's response text.
         """
-        user = cls.get_or_create_user(db, platform, phone_or_handle)
+        # Verify user existence in database
+        user = db.query(User).filter(User.phone_or_handle == phone_or_handle).first()
         session = USER_SESSIONS.setdefault(phone_or_handle, {"state": "IDLE", "deal_id": None})
+        
+        # Check if the incoming message is a simulated JSON Flow submission
+        if not user and text.strip().startswith("{") and text.strip().endswith("}"):
+            import json
+            try:
+                flow_data = json.loads(text.strip())
+                if "flow_name" in flow_data or "name" in flow_data:
+                    return cls.complete_onboarding(
+                        db=db,
+                        platform=platform,
+                        phone_or_handle=phone_or_handle,
+                        data={
+                            "name": flow_data.get("name"),
+                            "recovery_contact": flow_data.get("recovery_contact") or flow_data.get("recovery_email_or_phone"),
+                            "location": flow_data.get("location")
+                        }
+                    )
+            except Exception as json_err:
+                logger.warning(f"Failed to parse text as simulated Flow JSON: {json_err}")
+
+        normalized_text = text.strip().upper()
+        
+        # Onboarding Flow and text fallback state routing
+        if not user:
+            state = session.get("state", "IDLE")
+            if not state.startswith("ONBOARDING"):
+                session["onboarding_pending_action"] = text
+                session["onboarding_pending_media"] = media_url
+                session["onboarding_data"] = {}
+                
+                if platform == PlatformType.WHATSAPP:
+                    session["state"] = "ONBOARDING_FLOW"
+                    return "Welcome to HoldUntil Escrow! To ensure secure transactions and prevent impersonation, " \
+                           "we need you to complete a quick, one-time profile setup.\n\n" \
+                           "Tap the button below to open the registration Flow.\n\n" \
+                           "*(If your WhatsApp version doesn't support Flows, just reply with 'START' to use text-based onboarding instead.)*"
+                else:
+                    # Messenger or Instagram: go straight to text-based sequence
+                    session["state"] = "ONBOARDING_FALLBACK_NAME"
+                    return "Welcome to HoldUntil Escrow! To ensure secure transactions and prevent impersonation, " \
+                           "we need you to complete a quick, one-time profile setup.\n\n" \
+                           "What is your full name?\n\n" \
+                           "Helper: We'll quietly check this matches your M-Pesa registration when you transact — this helps protect both buyers and sellers from impersonation."
+            
+            elif state == "ONBOARDING_FLOW":
+                if normalized_text == "START":
+                    session["state"] = "ONBOARDING_FALLBACK_NAME"
+                    return "Let's proceed with text-based setup. What is your full name?\n\n" \
+                           "Helper: We'll quietly check this matches your M-Pesa registration when you transact — this helps protect both buyers and sellers from impersonation."
+                else:
+                    return "Please complete your profile creation using the WhatsApp Flow button above, or reply 'START' to do it via text messaging instead."
+            
+            elif state == "ONBOARDING_FALLBACK_NAME":
+                if not text.strip():
+                    return "Name cannot be empty. Please enter your full name:"
+                session["onboarding_data"]["name"] = text.strip()
+                session["state"] = "ONBOARDING_FALLBACK_RECOVERY"
+                return "Thank you. What is your backup email or phone number?\n\n" \
+                       "Helper: This protects you if you ever lose access to WhatsApp, Instagram, or Messenger — you'll still be able to manage your deals."
+            
+            elif state == "ONBOARDING_FALLBACK_RECOVERY":
+                if not text.strip():
+                    return "Recovery contact cannot be empty. Please enter a backup email or phone number:"
+                session["onboarding_data"]["recovery_contact"] = text.strip()
+                session["state"] = "ONBOARDING_FALLBACK_LOCATION"
+                return "Got it. What is your general location? (City or town is enough — no full address needed. Reply with your location, or type 'skip' to skip.)\n\n" \
+                       "Helper: Helps us match you with nearby local handoff deals."
+            
+            elif state == "ONBOARDING_FALLBACK_LOCATION":
+                loc = text.strip()
+                if loc.upper() == "SKIP":
+                    session["onboarding_data"]["location"] = None
+                else:
+                    session["onboarding_data"]["location"] = loc
+                session["state"] = "ONBOARDING_FALLBACK_CONSENT"
+                return "Finally, please review and agree to the consent terms below:\n\n" \
+                       "\"I understand that messages and evidence submitted in HoldUntil transactions may be reviewed to resolve disputes, and that providing false information may result in restricted access.\"\n\n" \
+                       "Do you agree? Reply YES or NO."
+            
+            elif state == "ONBOARDING_FALLBACK_CONSENT":
+                if normalized_text in ["YES", "AGREE", "Y"]:
+                    return cls.complete_onboarding(
+                        db=db,
+                        platform=platform,
+                        phone_or_handle=phone_or_handle,
+                        data={
+                            "name": session["onboarding_data"].get("name"),
+                            "recovery_contact": session["onboarding_data"].get("recovery_contact"),
+                            "location": session["onboarding_data"].get("location")
+                        }
+                    )
+                elif normalized_text in ["NO", "N"]:
+                    return "You must agree to the terms to use HoldUntil. Reply YES when you are ready to accept and complete your profile."
+                else:
+                    return "Invalid response. Please reply YES or NO to agree to the consent terms."
         
         normalized_text = text.strip().upper()
         

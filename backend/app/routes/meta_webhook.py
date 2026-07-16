@@ -87,6 +87,38 @@ async def receive_meta_message(request: Request, db: Session = Depends(get_db)):
                 elif msg_type == "document":
                     text_content = msg.get("document", {}).get("filename", "[Document]")
                     media_url = f"https://mock-meta-cdn.sokosafi/media/{msg.get('document', {}).get('id')}"
+                elif msg_type == "interactive":
+                    interactive = msg.get("interactive", {})
+                    int_type = interactive.get("type")
+                    if int_type == "nfm_reply":
+                        nfm_reply = interactive.get("nfm_reply", {})
+                        if nfm_reply.get("name") in ["flow", "profile_creation"]:
+                            response_json = nfm_reply.get("response_json", "{}")
+                            import json
+                            try:
+                                flow_data = json.loads(response_json)
+                                bot_reply = ChatBotService.complete_onboarding(
+                                    db=db,
+                                    platform=platform,
+                                    phone_or_handle=sender,
+                                    data={
+                                        "name": flow_data.get("name"),
+                                        "recovery_contact": flow_data.get("recovery_contact") or flow_data.get("recovery_email_or_phone"),
+                                        "location": flow_data.get("location")
+                                    }
+                                )
+                                from backend.app.services.chat_bot import USER_SESSIONS
+                                deal_id = USER_SESSIONS.get(sender, {}).get("deal_id")
+                                MetaService.send_text_message(
+                                    db=db,
+                                    platform=platform,
+                                    recipient=sender,
+                                    text=bot_reply,
+                                    deal_id=deal_id
+                                )
+                            except Exception as parse_err:
+                                logger.error(f"Error parsing webhook flow response json: {parse_err}")
+                            continue
 
                 if text_content or media_url:
                     # Capture active deal ID before running state machine resets it

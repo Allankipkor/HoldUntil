@@ -20,6 +20,16 @@ export default function App() {
   // Sandbox State
   const [sellerPhone, setSellerPhone] = useState('254711111111');
   const [buyerPhone, setBuyerPhone] = useState('254722222222');
+  
+  // Onboarding Flow State
+  const [sellerSessionState, setSellerSessionState] = useState('IDLE');
+  const [buyerSessionState, setBuyerSessionState] = useState('IDLE');
+  const [showSellerFlowModal, setShowSellerFlowModal] = useState(false);
+  const [showBuyerFlowModal, setShowBuyerFlowModal] = useState(false);
+  const [flowName, setFlowName] = useState('');
+  const [flowRecovery, setFlowRecovery] = useState('');
+  const [flowLocation, setFlowLocation] = useState('');
+  const [flowConsent, setFlowConsent] = useState(false);
   const [sellerMsg, setSellerMsg] = useState('');
   const [buyerMsg, setBuyerMsg] = useState('');
   const [chatLogs, setChatLogs] = useState([]);
@@ -492,6 +502,14 @@ export default function App() {
           timestamp: new Date().toISOString()
         };
         setChatLogs(prev => [...prev, botLog]);
+
+        if (data.session_state) {
+          if (senderPhone === sellerPhone) {
+            setSellerSessionState(data.session_state);
+          } else {
+            setBuyerSessionState(data.session_state);
+          }
+        }
 
         if (data.deal_id) {
           setActiveDealId(data.deal_id);
@@ -967,10 +985,135 @@ export default function App() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr 1fr', gap: '16px', minHeight: 'calc(100vh - 150px)' }}>
             
             {/* SELLER VIRTUAL MOBILE */}
-            <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '16px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--border-muted)', paddingBottom: '12px', marginBottom: '12px' }}>
-                <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--primary)' }}></div>
-                <h3 style={{ fontSize: '0.95rem' }}>Seller View (+254 711...)</h3>
+            <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '16px', position: 'relative' }}>
+              
+              {/* WhatsApp Flow Screen Simulation Modal */}
+              {showSellerFlowModal && (
+                <div style={{
+                  position: 'absolute',
+                  top: 0, left: 0, right: 0, bottom: 0,
+                  background: '#0b141a',
+                  zIndex: 200,
+                  borderRadius: '12px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  color: '#e9edef',
+                  padding: '16px'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #222e35', paddingBottom: '10px', marginBottom: '16px' }}>
+                    <h4 style={{ fontSize: '0.95rem', fontWeight: 'bold', margin: 0, color: 'white' }}>Create Profile (WhatsApp Flow)</h4>
+                    <button onClick={() => setShowSellerFlowModal(false)} style={{ background: 'none', border: 'none', color: '#8696a0', fontSize: '1.2rem', cursor: 'pointer' }}>×</button>
+                  </div>
+                  
+                  <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '0.75rem' }}>
+                    <div>
+                      <label style={{ color: '#8696a0', display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>Your full name (required)</label>
+                      <input 
+                        type="text" 
+                        value={flowName} 
+                        onChange={(e) => setFlowName(e.target.value)} 
+                        placeholder="e.g. Allan Kip" 
+                        style={{ width: '100%', padding: '8px', background: '#2a3942', border: 'none', borderRadius: '6px', color: 'white' }}
+                      />
+                      <span style={{ color: '#8696a0', display: 'block', marginTop: '4px', fontSize: '0.65rem', lineHeight: '1.2' }}>
+                        We'll quietly check this matches your M-Pesa registration when you transact — this helps protect both buyers and sellers from impersonation.
+                      </span>
+                    </div>
+
+                    <div>
+                      <label style={{ color: '#8696a0', display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>Backup email or phone number (required)</label>
+                      <input 
+                        type="text" 
+                        value={flowRecovery} 
+                        onChange={(e) => setFlowRecovery(e.target.value)} 
+                        placeholder="e.g. backup@example.com" 
+                        style={{ width: '100%', padding: '8px', background: '#2a3942', border: 'none', borderRadius: '6px', color: 'white' }}
+                      />
+                      <span style={{ color: '#8696a0', display: 'block', marginTop: '4px', fontSize: '0.65rem', lineHeight: '1.2' }}>
+                        This protects you if you ever lose access to WhatsApp, Instagram, or Messenger — you'll still be able to manage your deals.
+                      </span>
+                    </div>
+
+                    <div>
+                      <label style={{ color: '#8696a0', display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>Your general location (optional)</label>
+                      <select 
+                        value={flowLocation} 
+                        onChange={(e) => setFlowLocation(e.target.value)} 
+                        style={{ width: '100%', padding: '8px', background: '#2a3942', border: 'none', borderRadius: '6px', color: 'white' }}
+                      >
+                        <option value="">-- Select town (optional) --</option>
+                        <option value="Nairobi">Nairobi</option>
+                        <option value="Mombasa">Mombasa</option>
+                        <option value="Kisumu">Kisumu</option>
+                        <option value="Nakuru">Nakuru</option>
+                        <option value="Eldoret">Eldoret</option>
+                        <option value="Other">Other Town</option>
+                      </select>
+                      <span style={{ color: '#8696a0', display: 'block', marginTop: '4px', fontSize: '0.65rem', lineHeight: '1.2' }}>
+                        Helps us match you with nearby local handoff deals. City or town is enough — no full address needed.
+                      </span>
+                    </div>
+
+                    <div style={{ background: 'rgba(6,182,212,0.1)', padding: '8px', borderRadius: '6px', border: '1px solid rgba(6,182,212,0.2)', color: 'var(--secondary)', fontSize: '0.7rem' }}>
+                      Want faster trust with buyers? Complete 10 deals to unlock your Verified Seller badge.
+                    </div>
+
+                    <label style={{ display: 'flex', gap: '8px', color: '#d1d7db', cursor: 'pointer', alignItems: 'flex-start' }}>
+                      <input 
+                        type="checkbox" 
+                        checked={flowConsent} 
+                        onChange={(e) => setFlowConsent(e.target.checked)} 
+                        style={{ marginTop: '2px' }}
+                      />
+                      <span style={{ fontSize: '0.68rem', lineHeight: '1.3' }}>
+                        I understand that messages and evidence submitted in HoldUntil transactions may be reviewed to resolve disputes, and that providing false information may result in restricted access.
+                      </span>
+                    </label>
+                  </div>
+                  
+                  <button 
+                    onClick={() => {
+                      if (!flowName.trim() || !flowRecovery.trim() || !flowConsent) {
+                        alert("Please fill in all required fields and check the consent box.");
+                        return;
+                      }
+                      const payload = {
+                        flow_name: "profile_creation",
+                        name: flowName,
+                        recovery_contact: flowRecovery,
+                        location: flowLocation || null,
+                        consent: true
+                      };
+                      sendSandboxMessage(sellerPhone, JSON.stringify(payload), 'Seller');
+                      setShowSellerFlowModal(false);
+                      setFlowName('');
+                      setFlowRecovery('');
+                      setFlowLocation('');
+                      setFlowConsent(false);
+                    }}
+                    className="btn btn-primary" 
+                    style={{ width: '100%', padding: '10px', fontSize: '0.8rem', fontWeight: 'bold', marginTop: '12px' }}
+                  >
+                    Submit Profile Setup
+                  </button>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-muted)', paddingBottom: '12px', marginBottom: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--primary)' }}></div>
+                  <h3 style={{ fontSize: '0.9rem', margin: 0, fontWeight: 'bold' }}>Seller View</h3>
+                </div>
+                <input 
+                  type="text" 
+                  value={sellerPhone} 
+                  onChange={(e) => {
+                    setSellerPhone(e.target.value);
+                    setSellerSessionState('IDLE');
+                  }} 
+                  title="Edit to simulate different phone numbers"
+                  style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-muted)', borderRadius: '4px', color: 'white', fontSize: '0.75rem', width: '110px', padding: '2px 6px', textAlign: 'right' }}
+                />
               </div>
               
               {/* Chat View */}
@@ -1008,6 +1151,29 @@ export default function App() {
                     </div>
                   );
                 })}
+                {sellerSessionState === 'ONBOARDING_FLOW' && (
+                  <div style={{ alignSelf: 'center', margin: '8px 0', padding: '8px', background: 'rgba(6,182,212,0.1)', border: '1px dashed var(--primary)', borderRadius: '8px', textAlign: 'center', width: '100%' }}>
+                    <p style={{ fontSize: '0.75rem', color: '#8696a0', marginBottom: '8px' }}>WhatsApp Flow Form Available</p>
+                    <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                      <button 
+                        type="button"
+                        onClick={() => setShowSellerFlowModal(true)} 
+                        className="btn btn-primary" 
+                        style={{ padding: '6px 12px', fontSize: '0.75rem', fontWeight: 'bold' }}
+                      >
+                        📋 Open Flow Form
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => sendSandboxMessage(sellerPhone, 'START', 'Seller')} 
+                        className="btn btn-secondary" 
+                        style={{ padding: '6px 12px', fontSize: '0.75rem' }}
+                      >
+                        ⌨️ Text Fallback
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div ref={chatBottomRef} />
               </div>
 
@@ -1414,10 +1580,135 @@ export default function App() {
             </div>
 
             {/* BUYER VIRTUAL MOBILE */}
-            <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '16px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--border-muted)', paddingBottom: '12px', marginBottom: '12px' }}>
-                <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--secondary)' }}></div>
-                <h3 style={{ fontSize: '0.95rem' }}>Buyer View (+254 722...)</h3>
+            <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '16px', position: 'relative' }}>
+              
+              {/* WhatsApp Flow Screen Simulation Modal (Buyer) */}
+              {showBuyerFlowModal && (
+                <div style={{
+                  position: 'absolute',
+                  top: 0, left: 0, right: 0, bottom: 0,
+                  background: '#0b141a',
+                  zIndex: 200,
+                  borderRadius: '12px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  color: '#e9edef',
+                  padding: '16px'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #222e35', paddingBottom: '10px', marginBottom: '16px' }}>
+                    <h4 style={{ fontSize: '0.95rem', fontWeight: 'bold', margin: 0, color: 'white' }}>Create Profile (WhatsApp Flow)</h4>
+                    <button onClick={() => setShowBuyerFlowModal(false)} style={{ background: 'none', border: 'none', color: '#8696a0', fontSize: '1.2rem', cursor: 'pointer' }}>×</button>
+                  </div>
+                  
+                  <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '0.75rem' }}>
+                    <div>
+                      <label style={{ color: '#8696a0', display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>Your full name (required)</label>
+                      <input 
+                        type="text" 
+                        value={flowName} 
+                        onChange={(e) => setFlowName(e.target.value)} 
+                        placeholder="e.g. Allan Kip" 
+                        style={{ width: '100%', padding: '8px', background: '#2a3942', border: 'none', borderRadius: '6px', color: 'white' }}
+                      />
+                      <span style={{ color: '#8696a0', display: 'block', marginTop: '4px', fontSize: '0.65rem', lineHeight: '1.2' }}>
+                        We'll quietly check this matches your M-Pesa registration when you transact — this helps protect both buyers and sellers from impersonation.
+                      </span>
+                    </div>
+
+                    <div>
+                      <label style={{ color: '#8696a0', display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>Backup email or phone number (required)</label>
+                      <input 
+                        type="text" 
+                        value={flowRecovery} 
+                        onChange={(e) => setFlowRecovery(e.target.value)} 
+                        placeholder="e.g. backup@example.com" 
+                        style={{ width: '100%', padding: '8px', background: '#2a3942', border: 'none', borderRadius: '6px', color: 'white' }}
+                      />
+                      <span style={{ color: '#8696a0', display: 'block', marginTop: '4px', fontSize: '0.65rem', lineHeight: '1.2' }}>
+                        This protects you if you ever lose access to WhatsApp, Instagram, or Messenger — you'll still be able to manage your deals.
+                      </span>
+                    </div>
+
+                    <div>
+                      <label style={{ color: '#8696a0', display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>Your general location (optional)</label>
+                      <select 
+                        value={flowLocation} 
+                        onChange={(e) => setFlowLocation(e.target.value)} 
+                        style={{ width: '100%', padding: '8px', background: '#2a3942', border: 'none', borderRadius: '6px', color: 'white' }}
+                      >
+                        <option value="">-- Select town (optional) --</option>
+                        <option value="Nairobi">Nairobi</option>
+                        <option value="Mombasa">Mombasa</option>
+                        <option value="Kisumu">Kisumu</option>
+                        <option value="Nakuru">Nakuru</option>
+                        <option value="Eldoret">Eldoret</option>
+                        <option value="Other">Other Town</option>
+                      </select>
+                      <span style={{ color: '#8696a0', display: 'block', marginTop: '4px', fontSize: '0.65rem', lineHeight: '1.2' }}>
+                        Helps us match you with nearby local handoff deals. City or town is enough — no full address needed.
+                      </span>
+                    </div>
+
+                    <div style={{ background: 'rgba(6,182,212,0.1)', padding: '8px', borderRadius: '6px', border: '1px solid rgba(6,182,212,0.2)', color: 'var(--secondary)', fontSize: '0.7rem' }}>
+                      Want faster trust with buyers? Complete 10 deals to unlock your Verified Seller badge.
+                    </div>
+
+                    <label style={{ display: 'flex', gap: '8px', color: '#d1d7db', cursor: 'pointer', alignItems: 'flex-start' }}>
+                      <input 
+                        type="checkbox" 
+                        checked={flowConsent} 
+                        onChange={(e) => setFlowConsent(e.target.checked)} 
+                        style={{ marginTop: '2px' }}
+                      />
+                      <span style={{ fontSize: '0.68rem', lineHeight: '1.3' }}>
+                        I understand that messages and evidence submitted in HoldUntil transactions may be reviewed to resolve disputes, and that providing false information may result in restricted access.
+                      </span>
+                    </label>
+                  </div>
+                  
+                  <button 
+                    onClick={() => {
+                      if (!flowName.trim() || !flowRecovery.trim() || !flowConsent) {
+                        alert("Please fill in all required fields and check the consent box.");
+                        return;
+                      }
+                      const payload = {
+                        flow_name: "profile_creation",
+                        name: flowName,
+                        recovery_contact: flowRecovery,
+                        location: flowLocation || null,
+                        consent: true
+                      };
+                      sendSandboxMessage(buyerPhone, JSON.stringify(payload), 'Buyer');
+                      setShowBuyerFlowModal(false);
+                      setFlowName('');
+                      setFlowRecovery('');
+                      setFlowLocation('');
+                      setFlowConsent(false);
+                    }}
+                    className="btn btn-primary" 
+                    style={{ width: '100%', padding: '10px', fontSize: '0.8rem', fontWeight: 'bold', marginTop: '12px' }}
+                  >
+                    Submit Profile Setup
+                  </button>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border-muted)', paddingBottom: '12px', marginBottom: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--secondary)' }}></div>
+                  <h3 style={{ fontSize: '0.9rem', margin: 0, fontWeight: 'bold' }}>Buyer View</h3>
+                </div>
+                <input 
+                  type="text" 
+                  value={buyerPhone} 
+                  onChange={(e) => {
+                    setBuyerPhone(e.target.value);
+                    setBuyerSessionState('IDLE');
+                  }} 
+                  title="Edit to simulate different phone numbers"
+                  style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-muted)', borderRadius: '4px', color: 'white', fontSize: '0.75rem', width: '110px', padding: '2px 6px', textAlign: 'right' }}
+                />
               </div>
 
               {/* Chat View */}
@@ -1455,6 +1746,29 @@ export default function App() {
                     </div>
                   );
                 })}
+                {buyerSessionState === 'ONBOARDING_FLOW' && (
+                  <div style={{ alignSelf: 'center', margin: '8px 0', padding: '8px', background: 'rgba(6,182,212,0.1)', border: '1px dashed var(--primary)', borderRadius: '8px', textAlign: 'center', width: '100%' }}>
+                    <p style={{ fontSize: '0.75rem', color: '#8696a0', marginBottom: '8px' }}>WhatsApp Flow Form Available</p>
+                    <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                      <button 
+                        type="button"
+                        onClick={() => setShowBuyerFlowModal(true)} 
+                        className="btn btn-primary" 
+                        style={{ padding: '6px 12px', fontSize: '0.75rem', fontWeight: 'bold' }}
+                      >
+                        📋 Open Flow Form
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => sendSandboxMessage(buyerPhone, 'START', 'Buyer')} 
+                        className="btn btn-secondary" 
+                        style={{ padding: '6px 12px', fontSize: '0.75rem' }}
+                      >
+                        ⌨️ Text Fallback
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Chat Input */}

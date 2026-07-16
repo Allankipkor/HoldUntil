@@ -26,6 +26,28 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing database tables...")
     Base.metadata.create_all(bind=engine)
     
+    # Auto-migrate SQLite users table for new fields
+    try:
+        from sqlalchemy import inspect
+        from sqlalchemy import text
+        inspector = inspect(engine)
+        columns = [col['name'] for col in inspector.get_columns('users')]
+        with engine.begin() as conn:
+            if 'name' not in columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN name VARCHAR(100)"))
+                logger.info("Added name column to users table.")
+            if 'recovery_email_or_phone' not in columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN recovery_email_or_phone VARCHAR(100)"))
+                logger.info("Added recovery_email_or_phone column to users table.")
+            if 'location' not in columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN location VARCHAR(100)"))
+                logger.info("Added location column to users table.")
+            if 'consent_accepted_at' not in columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN consent_accepted_at DATETIME"))
+                logger.info("Added consent_accepted_at column to users table.")
+    except Exception as migration_err:
+        logger.error(f"Error running user table migration: {migration_err}")
+    
     # Seed staff users
     db = SessionLocal()
     try:
