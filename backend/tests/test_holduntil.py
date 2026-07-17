@@ -1012,22 +1012,28 @@ def test_first_time_user_onboarding_and_resume(db_session):
     
     # 3. Enter Name
     r3 = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, new_phone, "Allan Kip")
-    assert "backup email" in r3.lower()
-    assert USER_SESSIONS[new_phone]["state"] == "ONBOARDING_FALLBACK_RECOVERY"
+    assert "m-pesa" in r3.lower()
+    assert USER_SESSIONS[new_phone]["state"] == "ONBOARDING_FALLBACK_PAYOUT"
     assert USER_SESSIONS[new_phone]["onboarding_data"]["name"] == "Allan Kip"
     
-    # 4. Enter Recovery
+    # 4. Enter Payout Number
+    r3_payout = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, new_phone, "254711111111")
+    assert "backup email" in r3_payout.lower()
+    assert USER_SESSIONS[new_phone]["state"] == "ONBOARDING_FALLBACK_RECOVERY"
+    assert USER_SESSIONS[new_phone]["onboarding_data"]["payout_mpesa_number"] == "254711111111"
+
+    # 5. Enter Recovery
     r4 = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, new_phone, "allan@example.com")
     assert "location" in r4.lower()
     assert USER_SESSIONS[new_phone]["state"] == "ONBOARDING_FALLBACK_LOCATION"
     
-    # 5. Skip Location
+    # 6. Skip Location
     r5 = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, new_phone, "skip")
     assert "consent" in r5.lower()
     assert USER_SESSIONS[new_phone]["state"] == "ONBOARDING_FALLBACK_CONSENT"
     assert USER_SESSIONS[new_phone]["onboarding_data"]["location"] is None
     
-    # 6. Agree to consent and assert original 'SELL' action is resumed!
+    # 7. Agree to consent and assert original 'SELL' action is resumed!
     r6 = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, new_phone, "YES")
     assert "item description" in r6.lower() # Verify it welcomes user and prompts for description (resuming 'SELL')
     
@@ -1035,6 +1041,7 @@ def test_first_time_user_onboarding_and_resume(db_session):
     user_db = db_session.query(User).filter(User.phone_or_handle == new_phone).first()
     assert user_db is not None
     assert user_db.name == "Allan Kip"
+    assert user_db.payout_mpesa_number == "254711111111"
     assert user_db.recovery_email_or_phone == "allan@example.com"
     assert user_db.location is None
     assert user_db.consent_accepted_at is not None
@@ -1069,6 +1076,7 @@ def test_first_time_user_flow_json_submission(db_session):
     flow_payload = {
         "flow_name": "profile_creation",
         "name": "Allan Kipkor",
+        "payout_mpesa_number": "254712345678",
         "recovery_contact": "allankip@example.com",
         "location": "Nairobi"
     }
@@ -1080,5 +1088,6 @@ def test_first_time_user_flow_json_submission(db_session):
     user_db = db_session.query(User).filter(User.phone_or_handle == new_phone).first()
     assert user_db is not None
     assert user_db.name == "Allan Kipkor"
+    assert user_db.payout_mpesa_number == "254712345678"
     assert user_db.recovery_email_or_phone == "allankip@example.com"
     assert user_db.location == "Nairobi"

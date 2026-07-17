@@ -103,6 +103,7 @@ async def receive_meta_message(request: Request, db: Session = Depends(get_db)):
                                     phone_or_handle=sender,
                                     data={
                                         "name": flow_data.get("name"),
+                                        "payout_mpesa_number": flow_data.get("payout_mpesa_number"),
                                         "recovery_contact": flow_data.get("recovery_contact") or flow_data.get("recovery_email_or_phone"),
                                         "location": flow_data.get("location")
                                     }

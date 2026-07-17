@@ -20,6 +20,14 @@
               },
               {
                 "type": "TextInput",
+                "name": "payout_mpesa_number",
+                "label": "M-Pesa number to receive payouts",
+                "required": true,
+                "input-type": "phone",
+                "helper-text": "Must match the name you entered above — we verify this automatically when you're paid, to protect against impersonation."
+              },
+              {
+                "type": "TextInput",
                 "name": "recovery_contact",
                 "label": "Backup email or phone number",
                 "required": true,
@@ -81,6 +89,7 @@
                   "name": "submit",
                   "payload": {
                     "name": "${form.name}",
+                    "payout_mpesa_number": "${form.payout_mpesa_number}",
                     "recovery_contact": "${form.recovery_contact}",
                     "location": "${form.location}",
                     "consent": "${form.consent}"

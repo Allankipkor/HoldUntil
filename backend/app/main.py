@@ -45,6 +45,9 @@ async def lifespan(app: FastAPI):
             if 'consent_accepted_at' not in columns:
                 conn.execute(text("ALTER TABLE users ADD COLUMN consent_accepted_at DATETIME"))
                 logger.info("Added consent_accepted_at column to users table.")
+            if 'payout_mpesa_number' not in columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN payout_mpesa_number VARCHAR(20)"))
+                logger.info("Added payout_mpesa_number column to users table.")
     except Exception as migration_err:
         logger.error(f"Error running user table migration: {migration_err}")
     

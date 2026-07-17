@@ -117,6 +117,7 @@ class ChatBotService:
             platform=platform,
             phone_or_handle=phone_or_handle,
             name=data.get("name"),
+            payout_mpesa_number=data.get("payout_mpesa_number"),
             recovery_email_or_phone=data.get("recovery_contact") or data.get("recovery_email_or_phone"),
             location=data.get("location"),
             consent_accepted_at=datetime.utcnow(),
@@ -167,6 +168,7 @@ class ChatBotService:
                         phone_or_handle=phone_or_handle,
                         data={
                             "name": flow_data.get("name"),
+                            "payout_mpesa_number": flow_data.get("payout_mpesa_number"),
                             "recovery_contact": flow_data.get("recovery_contact") or flow_data.get("recovery_email_or_phone"),
                             "location": flow_data.get("location")
                         }
@@ -210,6 +212,16 @@ class ChatBotService:
                 if not text.strip():
                     return "Name cannot be empty. Please enter your full name:"
                 session["onboarding_data"]["name"] = text.strip()
+                session["state"] = "ONBOARDING_FALLBACK_PAYOUT"
+                return "Thank you. What is your M-Pesa number to receive payouts?\n\n" \
+                       "Helper: Must match the name you entered above — we verify this automatically when you're paid, to protect against impersonation."
+            
+            elif state == "ONBOARDING_FALLBACK_PAYOUT":
+                payout_num = text.strip()
+                cleaned_payout = payout_num.replace("+", "")
+                if not cleaned_payout.isdigit() or len(cleaned_payout) < 9 or len(cleaned_payout) > 15:
+                    return "Invalid phone number format. Please enter a valid M-Pesa payout phone number (e.g., 254711111111):"
+                session["onboarding_data"]["payout_mpesa_number"] = payout_num
                 session["state"] = "ONBOARDING_FALLBACK_RECOVERY"
                 return "Thank you. What is your backup email or phone number?\n\n" \
                        "Helper: This protects you if you ever lose access to WhatsApp, Instagram, or Messenger — you'll still be able to manage your deals."
@@ -241,6 +253,7 @@ class ChatBotService:
                         phone_or_handle=phone_or_handle,
                         data={
                             "name": session["onboarding_data"].get("name"),
+                            "payout_mpesa_number": session["onboarding_data"].get("payout_mpesa_number"),
                             "recovery_contact": session["onboarding_data"].get("recovery_contact"),
                             "location": session["onboarding_data"].get("location")
                         }
@@ -271,8 +284,8 @@ class ChatBotService:
                 session["deal_id"] = active_deal_id
         
         # Guard for no active deal and not in setup/global commands
-        is_in_setup = session.get("state") in ["AWAITING_DESC", "AWAITING_PRICE", "AWAITING_TIMELINE"]
-        is_global_cmd = normalized_text in ["SELL", "HELP"] or normalized_text.startswith("JOIN_")
+        is_in_setup = session.get("state") in ["AWAITING_DESC", "AWAITING_PRICE", "AWAITING_TIMELINE", "AWAITING_PAYOUT_UPDATE"]
+        is_global_cmd = normalized_text in ["SELL", "HELP", "MY PROFILE", "UPDATE PAYOUT"] or normalized_text.startswith("JOIN_") or normalized_text.startswith("UPDATE PAYOUT ")
         
         if not active_deal_id and not is_in_setup and not is_global_cmd:
             return "You don't have an active deal right now. Message 'SELL' to start one, or share/enter a JOIN code to join someone else's deal."
@@ -287,6 +300,17 @@ class ChatBotService:
             )
             db.add(chat_log)
             db.commit()
+
+        # AWAITING_PAYOUT_UPDATE State Handling
+        if session.get("state") == "AWAITING_PAYOUT_UPDATE":
+            new_payout = text.strip()
+            cleaned_payout = new_payout.replace("+", "")
+            if not cleaned_payout.isdigit() or len(cleaned_payout) < 9 or len(cleaned_payout) > 15:
+                return "Invalid phone number format. Please enter a valid M-Pesa payout phone number (e.g., 254711111111):"
+            user.payout_mpesa_number = new_payout
+            db.commit()
+            session["state"] = "IDLE"
+            return f"✅ Payout M-Pesa number successfully updated to: {new_payout}"
 
         # AWAITING_DISPUTE_RESPONSE State Handling
         if session.get("state") == "AWAITING_DISPUTE_RESPONSE":
@@ -325,6 +349,31 @@ class ChatBotService:
         if normalized_text == "HELP":
             return cls._handle_help(platform)
         
+        if normalized_text == "MY PROFILE":
+            payout_info = user.payout_mpesa_number or "Not Set"
+            return (
+                f"👤 **Your HoldUntil Profile**\n\n"
+                f"• Name: {user.name}\n"
+                f"• Recovery: {user.recovery_email_or_phone}\n"
+                f"• Location: {user.location or 'Not Set'}\n"
+                f"• M-Pesa Payout Number: {payout_info}\n\n"
+                f"To update your payout number, reply with 'UPDATE PAYOUT <number>' or 'UPDATE PAYOUT'."
+            )
+
+        if normalized_text == "UPDATE PAYOUT" or normalized_text.startswith("UPDATE PAYOUT "):
+            parts = text.strip().split(None, 2)
+            if len(parts) > 2:
+                new_payout = parts[2].strip()
+                cleaned_payout = new_payout.replace("+", "")
+                if not cleaned_payout.isdigit() or len(cleaned_payout) < 9 or len(cleaned_payout) > 15:
+                    return "Invalid phone number format. Please enter a valid M-Pesa payout phone number (e.g., 254711111111):"
+                user.payout_mpesa_number = new_payout
+                db.commit()
+                return f"✅ Payout M-Pesa number successfully updated to: {new_payout}"
+            else:
+                session["state"] = "AWAITING_PAYOUT_UPDATE"
+                return "Please reply with your new M-Pesa payout number:"
+
         if normalized_text == "SELL":
             session["state"] = "AWAITING_DESC"
             session["deal_id"] = None
@@ -1060,7 +1109,9 @@ class ChatBotService:
             f"• **REJECT** — Reject and cancel transaction setup.\n"
             f"• **SHIPPED <tracking_number>** — Mark package as sent.\n"
             f"• **YES** — Confirm you received the item (releases cash).\n"
-            f"• **NO** — Dispute delivery (locks cash for moderator review)."
+            f"• **NO** — Dispute delivery (locks cash for moderator review).\n"
+            f"• **MY PROFILE** — View your profile details.\n"
+            f"• **UPDATE PAYOUT <number>** — Update payout M-Pesa number."
         )
 
     @classmethod

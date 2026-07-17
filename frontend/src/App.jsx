@@ -27,6 +27,7 @@ export default function App() {
   const [showSellerFlowModal, setShowSellerFlowModal] = useState(false);
   const [showBuyerFlowModal, setShowBuyerFlowModal] = useState(false);
   const [flowName, setFlowName] = useState('');
+  const [flowPayout, setFlowPayout] = useState('');
   const [flowRecovery, setFlowRecovery] = useState('');
   const [flowLocation, setFlowLocation] = useState('');
   const [flowConsent, setFlowConsent] = useState(false);
@@ -1021,6 +1022,20 @@ export default function App() {
                     </div>
 
                     <div>
+                      <label style={{ color: '#8696a0', display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>M-Pesa number to receive payouts (required)</label>
+                      <input 
+                        type="text" 
+                        value={flowPayout} 
+                        onChange={(e) => setFlowPayout(e.target.value)} 
+                        placeholder="e.g. 254711111111" 
+                        style={{ width: '100%', padding: '8px', background: '#2a3942', border: 'none', borderRadius: '6px', color: 'white' }}
+                      />
+                      <span style={{ color: '#8696a0', display: 'block', marginTop: '4px', fontSize: '0.65rem', lineHeight: '1.2' }}>
+                        Must match the name you entered above — we verify this automatically when you're paid, to protect against impersonation.
+                      </span>
+                    </div>
+
+                    <div>
                       <label style={{ color: '#8696a0', display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>Backup email or phone number (required)</label>
                       <input 
                         type="text" 
@@ -1073,13 +1088,14 @@ export default function App() {
                   
                   <button 
                     onClick={() => {
-                      if (!flowName.trim() || !flowRecovery.trim() || !flowConsent) {
+                      if (!flowName.trim() || !flowPayout.trim() || !flowRecovery.trim() || !flowConsent) {
                         alert("Please fill in all required fields and check the consent box.");
                         return;
                       }
                       const payload = {
                         flow_name: "profile_creation",
                         name: flowName,
+                        payout_mpesa_number: flowPayout,
                         recovery_contact: flowRecovery,
                         location: flowLocation || null,
                         consent: true
@@ -1087,6 +1103,7 @@ export default function App() {
                       sendSandboxMessage(sellerPhone, JSON.stringify(payload), 'Seller');
                       setShowSellerFlowModal(false);
                       setFlowName('');
+                      setFlowPayout('');
                       setFlowRecovery('');
                       setFlowLocation('');
                       setFlowConsent(false);
@@ -1616,6 +1633,20 @@ export default function App() {
                     </div>
 
                     <div>
+                      <label style={{ color: '#8696a0', display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>M-Pesa number to receive payouts (required)</label>
+                      <input 
+                        type="text" 
+                        value={flowPayout} 
+                        onChange={(e) => setFlowPayout(e.target.value)} 
+                        placeholder="e.g. 254711111111" 
+                        style={{ width: '100%', padding: '8px', background: '#2a3942', border: 'none', borderRadius: '6px', color: 'white' }}
+                      />
+                      <span style={{ color: '#8696a0', display: 'block', marginTop: '4px', fontSize: '0.65rem', lineHeight: '1.2' }}>
+                        Must match the name you entered above — we verify this automatically when you're paid, to protect against impersonation.
+                      </span>
+                    </div>
+
+                    <div>
                       <label style={{ color: '#8696a0', display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>Backup email or phone number (required)</label>
                       <input 
                         type="text" 
@@ -1668,13 +1699,14 @@ export default function App() {
                   
                   <button 
                     onClick={() => {
-                      if (!flowName.trim() || !flowRecovery.trim() || !flowConsent) {
+                      if (!flowName.trim() || !flowPayout.trim() || !flowRecovery.trim() || !flowConsent) {
                         alert("Please fill in all required fields and check the consent box.");
                         return;
                       }
                       const payload = {
                         flow_name: "profile_creation",
                         name: flowName,
+                        payout_mpesa_number: flowPayout,
                         recovery_contact: flowRecovery,
                         location: flowLocation || null,
                         consent: true
@@ -1682,6 +1714,7 @@ export default function App() {
                       sendSandboxMessage(buyerPhone, JSON.stringify(payload), 'Buyer');
                       setShowBuyerFlowModal(false);
                       setFlowName('');
+                      setFlowPayout('');
                       setFlowRecovery('');
                       setFlowLocation('');
                       setFlowConsent(false);
@@ -2508,6 +2541,7 @@ export default function App() {
                       <th style={{ padding: '12px' }}>User ID</th>
                       <th style={{ padding: '12px' }}>Phone / Handle</th>
                       <th style={{ padding: '12px' }}>Role</th>
+                      <th style={{ padding: '12px' }}>Payout M-Pesa</th>
                       <th style={{ padding: '12px' }}>Trust Score</th>
                       <th style={{ padding: '12px' }}>Disputes Overturned</th>
                       <th style={{ padding: '12px' }}>Actions</th>
@@ -2516,7 +2550,7 @@ export default function App() {
                   <tbody>
                     {usersLoading ? (
                       <tr>
-                        <td colSpan="6" style={{ padding: '16px', textAlign: 'center' }}>Loading user registry...</td>
+                        <td colSpan="7" style={{ padding: '16px', textAlign: 'center' }}>Loading user registry...</td>
                       </tr>
                     ) : users.length > 0 ? (
                       users.map((u, idx) => (
@@ -2525,6 +2559,9 @@ export default function App() {
                           <td style={{ padding: '12px', fontWeight: '600' }}>{u.phone_or_handle}</td>
                           <td style={{ padding: '12px' }}>
                             <span style={{ fontSize: '10px', background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: '4px' }}>{u.role}</span>
+                          </td>
+                          <td style={{ padding: '12px' }}>
+                            <code>{u.payout_mpesa_number || 'Not Set'}</code>
                           </td>
                           <td style={{ padding: '12px' }}>
                             <span style={{ fontWeight: 'bold', color: u.trust_score >= 90 ? 'var(--primary)' : 'var(--accent-gold)' }}>
@@ -2548,7 +2585,7 @@ export default function App() {
                       ))
                     ) : (
                       <tr>
-                        <td colSpan="6" style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)' }}>No records loaded. Play with the Sandbox simulator to register users automatically.</td>
+                        <td colSpan="7" style={{ padding: '16px', textAlign: 'center', color: 'var(--text-muted)' }}>No records loaded. Play with the Sandbox simulator to register users automatically.</td>
                       </tr>
                     )}
                   </tbody>
