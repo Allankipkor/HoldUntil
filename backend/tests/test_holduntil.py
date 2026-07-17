@@ -277,6 +277,7 @@ def test_dispute_resolution_and_trust_adjustment(db_session):
     # First-instance: resolved_at is set, outcome is RELEASE, but deal.status remains DISPUTED (payout deferred)
     assert dispute.resolved_at is not None
     assert dispute.final_outcome == OutcomeType.RELEASE
+    assert dispute.resolution_statement == "Heuristic matched"
     assert deal.status == DealStatus.DISPUTED
 
     # 5. Buyer files an APPEAL
@@ -1091,3 +1092,87 @@ def test_first_time_user_flow_json_submission(db_session):
     assert user_db.payout_mpesa_number == "254712345678"
     assert user_db.recovery_email_or_phone == "allankip@example.com"
     assert user_db.location == "Nairobi"
+
+def test_mediator_save_resolution_and_scheduler_lapsed_payout(db_session):
+    """Verify separate save resolution (24h appeal window notification) and lapsed payout scheduler logic."""
+    from backend.app.models import User, UserRole, Deal, DealStatus, Dispute, DisputeTier, OutcomeType, PlatformType, Payment, PaymentStatus, ChatLog
+    from backend.app.routes.dashboard import resolve_dispute_manually
+    from backend.app.services.scheduler import run_tier_1_checks
+    from datetime import datetime, UTC, timedelta
+    
+    # 1. Setup users, deal, and dispute
+    seller = User(phone_or_handle="254711111199", role=UserRole.USER, platform=PlatformType.WHATSAPP, trust_score=100.0)
+    buyer = User(phone_or_handle="254722222299", role=UserRole.USER, platform=PlatformType.WHATSAPP, trust_score=100.0)
+    mediator = User(phone_or_handle="MOD_TEST_M1", role=UserRole.MODERATOR, platform=PlatformType.WHATSAPP)
+    db_session.add_all([seller, buyer, mediator])
+    db_session.commit()
+    
+    deal = Deal(
+        seller_id=seller.id,
+        buyer_id=buyer.id,
+        item_description="Test Laptop",
+        agreed_price=1000.0,
+        status=DealStatus.DISPUTED
+    )
+    db_session.add(deal)
+    db_session.commit()
+    
+    dispute = Dispute(
+        deal_id=deal.id,
+        filed_by=buyer.id,
+        reason="Did not boot",
+        tier=DisputeTier.TIER_2_AI,
+        is_appeal=False
+    )
+    db_session.add(dispute)
+    db_session.commit()
+    
+    # Add a funded payment
+    p = Payment(deal_id=deal.id, stk_push_ref="payout_ref_test", amount=1000.0, status=PaymentStatus.PAID)
+    db_session.add(p)
+    db_session.commit()
+    
+    # 2. Mediator resolves dispute manually (first-instance)
+    res = resolve_dispute_manually(
+        dispute_id=dispute.id,
+        outcome="refund",
+        reasoning="Seller provided no valid counter-evidence",
+        resolver_id=mediator.id,
+        db=db_session
+    )
+    
+    db_session.refresh(dispute)
+    db_session.refresh(deal)
+    
+    # Assertions for separate save and 24h notifications
+    assert res["status"] == "resolved"
+    assert dispute.resolved_at is not None
+    assert dispute.final_outcome == OutcomeType.REFUND
+    assert dispute.resolution_statement == "Seller provided no valid counter-evidence"
+    assert dispute.is_appeal is False
+    assert deal.status == DealStatus.DISPUTED  # Payout did NOT trigger immediately!
+    
+    # Verify both parties received WhatsApp messages with 24 hours instructions logged in ChatLog
+    sent_messages = db_session.query(ChatLog).filter(ChatLog.deal_id == deal.id).all()
+    assert len(sent_messages) >= 2
+    
+    msg_contents = [m.message_content for m in sent_messages]
+    assert any("24 hours" in content and "Seller provided no valid counter-evidence" in content for content in msg_contents)
+
+    # 3. Verify scheduler triggers payout after window lapses
+    # Simulate time passing beyond the appeal window (simulation mode uses 15 seconds)
+    dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=20)
+    db_session.commit()
+    
+    run_tier_1_checks(db_session)
+    db_session.refresh(deal)
+    db_session.refresh(dispute)
+    
+    # After scheduler run: payout triggered, status updated to REFUNDED
+    assert deal.status == DealStatus.REFUNDED
+    
+    # Verify payout record exists
+    payment = db_session.query(Payment).filter(Payment.deal_id == deal.id, Payment.b2c_payout_ref != None).first()
+    assert payment is not None
+    assert payment.status == PaymentStatus.REFUND_COMPLETED
+

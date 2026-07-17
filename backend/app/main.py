@@ -48,8 +48,14 @@ async def lifespan(app: FastAPI):
             if 'payout_mpesa_number' not in columns:
                 conn.execute(text("ALTER TABLE users ADD COLUMN payout_mpesa_number VARCHAR(20)"))
                 logger.info("Added payout_mpesa_number column to users table.")
+            
+            # Auto-migrate SQLite disputes table for new fields
+            columns_disputes = [col['name'] for col in inspector.get_columns('disputes')]
+            if 'resolution_statement' not in columns_disputes:
+                conn.execute(text("ALTER TABLE disputes ADD COLUMN resolution_statement TEXT"))
+                logger.info("Added resolution_statement column to disputes table.")
     except Exception as migration_err:
-        logger.error(f"Error running user table migration: {migration_err}")
+        logger.error(f"Error running database table migration: {migration_err}")
     
     # Seed staff users
     db = SessionLocal()

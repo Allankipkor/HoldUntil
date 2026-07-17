@@ -157,6 +157,7 @@ class Dispute(Base):
     final_outcome = Column(SQLEnum(OutcomeType), nullable=True)
     resolution_method = Column(SQLEnum(ResolutionMethod), nullable=True)
     resolved_at = Column(DateTime, nullable=True)
+    resolution_statement = Column(Text, nullable=True)
     filer_satisfied = Column(Boolean, nullable=True, default=None)
     partial_split_percentage = Column(Integer, nullable=True)
     

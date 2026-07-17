@@ -247,6 +247,7 @@ def resolve_dispute_manually(
         dispute.resolution_method = ResolutionMethod.APPEAL
         dispute.appeal_resolved_at = datetime.now(UTC).replace(tzinfo=None)
         dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
+        dispute.resolution_statement = reasoning
         
         # Trigger immediate payouts for appeal (second-instance)
         if outcome == "release":
@@ -313,12 +314,14 @@ def resolve_dispute_manually(
             raise HTTPException(status_code=403, detail="Only staff members can resolve disputes")
             
         from backend.app.models import ResolutionMethod
-        # Save outcome but do NOT trigger payouts yet (await 5-day appeal window)
+        # Save outcome but do NOT trigger payouts yet (await 24-hour appeal window)
         dispute.final_outcome = OutcomeType(outcome)
         dispute.resolution_method = ResolutionMethod.HUMAN_FIRST_INSTANCE
         dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
         dispute.human_moderator_id = resolver.id
         dispute.tier = DisputeTier.TIER_3_HUMAN
+        dispute.is_appeal = False
+        dispute.resolution_statement = reasoning
         
         # Determine who lost and what the decision is
         if outcome == "release":
@@ -343,13 +346,13 @@ def resolve_dispute_manually(
                 f"⚖️ Human Moderator Verdict:\n"
                 f"Decision: {verdict_desc}.\n"
                 f"Rationale: {reasoning}\n\n"
-                f"If you disagree with this decision, you may reply APPEAL within 3 days (KES 200.00 fee applies) to request senior arbitration review."
+                f"If you disagree with this decision, you may reply APPEAL within 24 hours (KES 200.00 fee applies) to request senior arbitration review."
             )
             other_msg = (
                 f"⚖️ Human Moderator Verdict:\n"
                 f"Decision: {verdict_desc}.\n"
                 f"Rationale: {reasoning}\n\n"
-                f"The other party has 3 days to appeal if they disagree, after which funds will be processed."
+                f"The other party has 24 hours to appeal if they disagree, after which funds will be processed."
             )
             MetaService.send_text_message(db, PlatformType.WHATSAPP, lost_user.phone_or_handle, lost_msg, deal.id)
             if other_user:
@@ -360,7 +363,7 @@ def resolve_dispute_manually(
                 f"⚖️ Human Moderator Verdict:\n"
                 f"Decision: {verdict_desc}.\n"
                 f"Rationale: {reasoning}\n\n"
-                f"If you disagree with this split, you may reply APPEAL within 3 days (KES 200.00 fee applies) to request senior arbitration review."
+                f"If you disagree with this split, you may reply APPEAL within 24 hours (KES 200.00 fee applies) to request senior arbitration review."
             )
             MetaService.send_text_message(db, PlatformType.WHATSAPP, buyer.phone_or_handle, split_msg, deal.id)
             MetaService.send_text_message(db, PlatformType.WHATSAPP, seller.phone_or_handle, split_msg, deal.id)

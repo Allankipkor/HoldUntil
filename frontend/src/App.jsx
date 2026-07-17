@@ -75,7 +75,7 @@ export default function App() {
   const [systemSettings, setSystemSettings] = useState({
     MIN_TRADES_FOR_PROFILE_STATS: 3,
     MIN_DEALS_FOR_BADGE: 10,
-    APPEAL_WINDOW_HOURS: 72,
+    APPEAL_WINDOW_HOURS: 24,
     DISPUTE_RESPONSE_WINDOW_HOURS: 24
   });
   const [settingsLoading, setSettingsLoading] = useState(false);
@@ -285,7 +285,7 @@ export default function App() {
       const formData = new FormData();
       formData.append("min_trades", systemSettings.MIN_TRADES_FOR_PROFILE_STATS);
       formData.append("min_deals_for_badge", systemSettings.MIN_DEALS_FOR_BADGE);
-      formData.append("appeal_window_hours", systemSettings.APPEAL_WINDOW_HOURS || 72);
+      formData.append("appeal_window_hours", systemSettings.APPEAL_WINDOW_HOURS || 24);
       formData.append("dispute_response_window_hours", systemSettings.DISPUTE_RESPONSE_WINDOW_HOURS || 24);
       
       const res = await fetch('/api/dashboard/settings', {
@@ -2426,7 +2426,11 @@ export default function App() {
                         </div>
 
                         <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
-                          Apply Human Resolution & Trigger Payout
+                          {(() => {
+                            const activeDispute = disputes.find(d => d.id === selectedDisputeId);
+                            const isAppeal = activeDispute?.is_appeal || false;
+                            return isAppeal ? "Apply Human Resolution & Trigger Payout" : "Save Resolution & Notify Parties";
+                          })()}
                         </button>
                       </form>
 
@@ -2501,8 +2505,8 @@ export default function App() {
                     <input 
                       type="number" 
                       min="1"
-                      value={systemSettings.APPEAL_WINDOW_HOURS || 72} 
-                      onChange={(e) => setSystemSettings(prev => ({ ...prev, APPEAL_WINDOW_HOURS: parseInt(e.target.value) || 72 }))}
+                      value={systemSettings.APPEAL_WINDOW_HOURS || 24} 
+                      onChange={(e) => setSystemSettings(prev => ({ ...prev, APPEAL_WINDOW_HOURS: parseInt(e.target.value) || 24 }))}
                       className="form-input"
                       style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-muted)', color: 'white', fontSize: '1rem', fontWeight: 'bold', width: '100%', padding: '8px' }}
                     />
