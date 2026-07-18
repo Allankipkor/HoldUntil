@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: holduntil-backend
+    runtime: python
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: SIMULATION_MODE
+        value: "true"
+      - key: DATABASE_URL
+        value: "sqlite:///./holduntil.db"
+      - key: META_API_VERSION
+        value: "v18.0"
+      - key: META_VERIFY_TOKEN
+        value: "holduntil_verify_token_123"
+      - key: META_ACCESS_TOKEN
+        value: "mock_meta_access_token"
+      - key: META_PHONE_NUMBER_ID
+        value: "mock_phone_number_id"
+      - key: DARAJA_ENV
+        value: "sandbox"
+      - key: DARAJA_CONSUMER_KEY
+        value: "mock_consumer_key"
+      - key: DARAJA_CONSUMER_SECRET
+        value: "mock_consumer_secret"
+      - key: DARAJA_SHORTCODE
+        value: "174379"
+      - key: DARAJA_PASSKEY
+        value: "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919"
+      - key: DARAJA_CALLBACK_URL
+        value: "https://example.com/api/daraja/callback"
+      - key: GEMINI_API_KEY
+        value: ""
