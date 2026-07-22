@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     DARAJA_B2C_SHORTCODE: str = "600000"
     DARAJA_INITIATOR_NAME: str = "testapi"
     DARAJA_SECURITY_CREDENTIAL: str = "mock_security_credential"
-    DARAJA_CALLBACK_URL: str = "https://example.com/api/daraja/callback"
-    DARAJA_B2C_CALLBACK_URL: str = "https://example.com/api/daraja/b2c_callback"
+    DARAJA_CALLBACK_URL: str = "https://example.com/api/webhook/daraja/callback"
+    DARAJA_B2C_CALLBACK_URL: str = "https://example.com/api/webhook/daraja/b2c_callback"
 
     # AI Moderator Settings (Gemini)
     GEMINI_API_KEY: str = ""

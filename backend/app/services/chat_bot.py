@@ -775,18 +775,49 @@ class ChatBotService:
                     USER_SESSIONS[deal.seller.phone_or_handle] = {"state": "IDLE", "deal_id": deal.id}
                     USER_SESSIONS[deal.buyer.phone_or_handle] = {"state": "IDLE", "deal_id": deal.id}
                     
-                    MetaService.send_text_message(
-                        db, platform, deal.seller.phone_or_handle,
-                        f"Deal '{deal.item_description[:30]}...' disclaimer acknowledged by both parties! "
-                        f"We are triggering the payment request to the buyer now.",
-                        deal.id
-                    )
-                    
-                    try:
-                        DarajaService.initiate_stk_push(db, deal, buyer_user.phone_or_handle)
-                        return "You have acknowledged the disclaimer. We have sent an M-Pesa STK Push to your phone. Please check your phone and enter your PIN to complete payment."
-                    except Exception as e:
-                        return f"Escrow setup failed due to M-Pesa connection error. Details: {str(e)}"
+                    if user.id == deal.seller_id:
+                        # Current user is Seller. They get the return value.
+                        # We send a text message to the Buyer.
+                        MetaService.send_text_message(
+                            db, platform, deal.buyer.phone_or_handle,
+                            f"Deal '{deal.item_description[:30]}...' disclaimer acknowledged by both parties! "
+                            f"We have sent an M-Pesa STK Push to your phone. Please check your phone and enter your PIN to complete payment.",
+                            deal.id
+                        )
+                        try:
+                            DarajaService.initiate_stk_push(db, deal, buyer_user.phone_or_handle)
+                        except Exception as e:
+                            logger.error(f"Failed to initiate STK push: {e}")
+                            # Notify buyer of error
+                            MetaService.send_text_message(
+                                db, platform, deal.buyer.phone_or_handle,
+                                f"Failed to initiate M-Pesa STK push: {str(e)}",
+                                deal.id
+                            )
+                            return f"Disclaimer acknowledged, but M-Pesa STK Push trigger failed: {str(e)}"
+                        
+                        return (
+                            f"You have acknowledged the disclaimer. Deal '{deal.item_description[:30]}...' "
+                            f"disclaimer acknowledged by both parties! We are triggering the M-Pesa STK Push payment request to the buyer now."
+                        )
+                    else:
+                        # Current user is Buyer. They get the return value.
+                        # We send a text message to the Seller.
+                        MetaService.send_text_message(
+                            db, platform, deal.seller.phone_or_handle,
+                            f"Deal '{deal.item_description[:30]}...' disclaimer acknowledged by both parties! "
+                            f"We are triggering the M-Pesa STK Push payment request to the buyer now.",
+                            deal.id
+                        )
+                        try:
+                            DarajaService.initiate_stk_push(db, deal, buyer_user.phone_or_handle)
+                            return (
+                                f"You have acknowledged the disclaimer. We have sent an M-Pesa STK Push to your phone. "
+                                f"Please check your phone and enter your PIN to complete payment."
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to initiate STK push: {e}")
+                            return f"You acknowledged the disclaimer, but M-Pesa STK Push trigger failed: {str(e)}"
                 else:
                     other_party = "Buyer" if user.id == deal.seller_id else "Seller"
                     return f"Acknowledgement recorded! Waiting for the {other_party} to acknowledge the disclaimer."
