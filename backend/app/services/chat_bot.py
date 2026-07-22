@@ -338,10 +338,18 @@ class ChatBotService:
                         # Notify filer
                         filer_user = db.query(User).filter(User.id == dispute.filed_by).first()
                         if filer_user:
-                            MetaService.send_text_message(
+                            filer_components = [{
+                                "type": "body",
+                                "parameters": [
+                                    {"type": "text", "text": deal.item_description[:30]},
+                                    {"type": "text", "text": "Dispute Under Review"},
+                                    {"type": "text", "text": f"The other party has submitted their response: \"{text[:50]}\"."},
+                                    {"type": "text", "text": "The dispute is now under moderator review."}
+                                ]
+                            }]
+                            MetaService.send_template_message(
                                 db, platform, filer_user.phone_or_handle,
-                                f"The other party has submitted their response: \"{text}\". The dispute is now under mediator review.",
-                                deal.id
+                                "deal_status_alert", components=filer_components, deal_id=deal.id
                             )
                         
                         return "Thank you. Your response statement has been recorded and submitted for mediator review."
@@ -410,7 +418,19 @@ class ChatBotService:
                 if is_buyer_cancel:
                     net_refund = deal.agreed_price - fee
                     DarajaService.initiate_b2c_payout(db, deal, deal.buyer.phone_or_handle, net_refund, is_refund=True)
-                    MetaService.send_text_message(db, platform, deal.seller.phone_or_handle, f"⚠️ The buyer has cancelled the deal. The transaction is cancelled.", deal.id)
+                    
+                    seller_cancel_components = [{
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": deal.item_description[:30]},
+                            {"type": "text", "text": "The transaction is cancelled."}
+                        ]
+                    }]
+                    MetaService.send_template_message(
+                        db, platform, deal.seller.phone_or_handle,
+                        "deal_cancelled_passive", components=seller_cancel_components, deal_id=deal.id
+                    )
+                    
                     session["deal_id"] = None
                     session["state"] = "IDLE"
                     return f"Deal cancelled. Your refund of KES {net_refund:.2f} (net of 0.5% cancellation fee) is processing."
@@ -418,7 +438,19 @@ class ChatBotService:
                     DarajaService.initiate_b2c_payout(db, deal, deal.buyer.phone_or_handle, deal.agreed_price, is_refund=True)
                     user.trust_score = max(0.0, user.trust_score - 10.0)
                     db.commit()
-                    MetaService.send_text_message(db, platform, deal.buyer.phone_or_handle, f"⚠️ The seller has cancelled the deal. A full refund of KES {deal.agreed_price:.2f} is processing.", deal.id)
+                    
+                    buyer_cancel_components = [{
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": deal.item_description[:30]},
+                            {"type": "text", "text": f"A full refund of KES {deal.agreed_price:.2f} is processing."}
+                        ]
+                    }]
+                    MetaService.send_template_message(
+                        db, platform, deal.buyer.phone_or_handle,
+                        "deal_cancelled_passive", components=buyer_cancel_components, deal_id=deal.id
+                    )
+                    
                     session["deal_id"] = None
                     session["state"] = "IDLE"
                     return f"Deal cancelled. A full refund has been triggered for the buyer. Your Trust Score has been penalized -10.0 points."
@@ -475,13 +507,18 @@ class ChatBotService:
             
             cls.auto_assign_arbitrator(db, dispute)
             
-            # Notify both parties
-            appeal_notify_msg = (
-                f"⚠️ The dispute for deal '{latest_deal.item_description}' has been appealed by {user.phone_or_handle}. "
-                f"It will be reviewed by a Senior Arbitrator. Escrow funds remain locked."
-            )
-            MetaService.send_text_message(db, platform, latest_deal.buyer.phone_or_handle, appeal_notify_msg, latest_deal.id)
-            MetaService.send_text_message(db, platform, latest_deal.seller.phone_or_handle, appeal_notify_msg, latest_deal.id)
+            # Notify both parties using templates
+            appeal_notify_components = [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": latest_deal.item_description[:30]},
+                    {"type": "text", "text": "Dispute Appealed"},
+                    {"type": "text", "text": f"The dispute has been appealed by {user.phone_or_handle}."},
+                    {"type": "text", "text": "It will be reviewed by a Senior Arbitrator. Escrow funds remain locked."}
+                ]
+            }]
+            MetaService.send_template_message(db, platform, latest_deal.buyer.phone_or_handle, "deal_status_alert", components=appeal_notify_components, deal_id=latest_deal.id)
+            MetaService.send_template_message(db, platform, latest_deal.seller.phone_or_handle, "deal_status_alert", components=appeal_notify_components, deal_id=latest_deal.id)
             
             session["state"] = "IDLE"
             session["deal_id"] = None
@@ -505,7 +542,19 @@ class ChatBotService:
                         db.commit()
                         
                         DarajaService.initiate_b2c_payout(db, deal, deal.seller.phone_or_handle, deal.agreed_price, is_refund=False)
-                        MetaService.send_text_message(db, platform, deal.seller.phone_or_handle, f"🎉 The buyer has voluntarily resolved the dispute and released the funds! Payout is processing.", deal.id)
+                        
+                        seller_resolved_components = [{
+                            "type": "body",
+                            "parameters": [
+                                {"type": "text", "text": deal.item_description[:30]},
+                                {"type": "text", "text": "payout processing"}
+                            ]
+                        }]
+                        MetaService.send_template_message(
+                            db, platform, deal.seller.phone_or_handle,
+                            "dispute_resolved_voluntary", components=seller_resolved_components, deal_id=deal.id
+                        )
+                        
                         session["deal_id"] = None
                         session["state"] = "IDLE"
                         return "You have voluntarily resolved the dispute and released all funds to the seller. Payout is processing."
@@ -518,7 +567,18 @@ class ChatBotService:
                         db.commit()
                         
                         DarajaService.initiate_b2c_payout(db, deal, deal.buyer.phone_or_handle, deal.agreed_price, is_refund=True)
-                        MetaService.send_text_message(db, platform, deal.buyer.phone_or_handle, f"🎉 The seller has voluntarily resolved the dispute and refunded the funds! Refund is processing.", deal.id)
+                        
+                        buyer_resolved_components = [{
+                            "type": "body",
+                            "parameters": [
+                                {"type": "text", "text": deal.item_description[:30]},
+                                {"type": "text", "text": "refund processing"}
+                            ]
+                        }]
+                        MetaService.send_template_message(
+                            db, platform, deal.buyer.phone_or_handle,
+                            "dispute_resolved_voluntary", components=buyer_resolved_components, deal_id=deal.id
+                        )
                         session["deal_id"] = None
                         session["state"] = "IDLE"
                         return "You have voluntarily resolved the dispute and returned all funds to the buyer. Refund is processing."
@@ -992,13 +1052,19 @@ class ChatBotService:
                     
                     session["state"] = "IDLE"
                     
-                    # Notify non-filer
+                    # Notify non-filer using template
                     window_hours = getattr(settings, "DISPUTE_RESPONSE_WINDOW_HOURS", 24)
-                    MetaService.send_text_message(
+                    non_filer_dispute_components = [{
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": deal.item_description[:30]},
+                            {"type": "text", "text": text[:50]},
+                            {"type": "text", "text": str(window_hours)}
+                        ]
+                    }]
+                    MetaService.send_template_message(
                         db, platform, non_filer_user.phone_or_handle,
-                        f"A dispute has been filed on this deal. Reason given: {text}. "
-                        f"You have {window_hours} hours to respond with your side and any supporting evidence before this is reviewed.",
-                        deal.id
+                        "dispute_filed_passive", components=non_filer_dispute_components, deal_id=deal.id
                     )
                     
                     return f"Your dispute has been recorded. We have notified the other party and given them {window_hours} hours to respond with their statement and evidence."
@@ -1119,11 +1185,19 @@ class ChatBotService:
             badge_tag = " [PRO]" if buyer_summary["has_badge"] else ""
             buyer_intro = f"Buyer {user.phone_or_handle}{badge_tag} has completed {buyer_summary['completed_trades']} trades at {buyer_summary['positive_rate']:.2f}% positive rating."
 
-        # Notify Seller
-        MetaService.send_text_message(
+        # Notify Seller using template
+        seller_join_components = [{
+            "type": "body",
+            "parameters": [
+                {"type": "text", "text": deal.item_description[:30]},
+                {"type": "text", "text": "Buyer Joined"},
+                {"type": "text", "text": f"Buyer {user.phone_or_handle} has joined the deal! {buyer_intro}"},
+                {"type": "text", "text": "Awaiting buyer's confirmation."}
+            ]
+        }]
+        MetaService.send_template_message(
             db, PlatformType.WHATSAPP, seller.phone_or_handle,
-            f"Buyer {user.phone_or_handle} has joined the deal! {buyer_intro} Awaiting buyer's confirmation.",
-            deal.id
+            "deal_status_alert", components=seller_join_components, deal_id=deal.id
         )
 
         return response

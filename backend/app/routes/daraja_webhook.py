@@ -49,26 +49,34 @@ async def mpesa_stk_callback(request: Request, db: Session = Depends(get_db)):
             deal.verification_code = f"HU-{uuid.uuid4().hex[:4].upper()}"
             db.commit()
 
-            # Notify Buyer
-            MetaService.send_text_message(
+            # Notify Buyer using template
+            buyer_components = [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": deal.item_description[:30]},
+                    {"type": "text", "text": "Payment Received"},
+                    {"type": "text", "text": f"M-Pesa Payment of KES {deal.agreed_price:.2f} received successfully! Receipt: {payment.c2b_confirmation_ref or 'Confirming'}."},
+                    {"type": "text", "text": "The funds are safely locked in HoldUntil escrow. The seller has been notified to ship the item."}
+                ]
+            }]
+            MetaService.send_template_message(
                 db, PlatformType.WHATSAPP, deal.buyer.phone_or_handle,
-                f"💰 M-Pesa Payment of KES {deal.agreed_price:.2f} received successfully! Receipt: {payment.c2b_confirmation_ref}.\n\n"
-                f"The funds are safely locked in HoldUntil escrow. The seller has been notified to ship the item.",
-                deal.id
+                "deal_status_alert", components=buyer_components, deal_id=deal.id
             )
 
-            # Notify Seller
-            MetaService.send_text_message(
+            # Notify Seller using template
+            seller_components = [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": deal.item_description[:30]},
+                    {"type": "text", "text": "Payment Confirmed"},
+                    {"type": "text", "text": f"Buyer has paid KES {deal.agreed_price:.2f} into secure escrow."},
+                    {"type": "text", "text": f"Please ship the item. Your package code is: {deal.verification_code}. Write it on the package, take a photo, and upload here as proof. Or reply: 'SHIPPED <courier_tracking_number>'."}
+                ]
+            }]
+            MetaService.send_template_message(
                 db, PlatformType.WHATSAPP, deal.seller.phone_or_handle,
-                f"🎉 Payment Confirmed!\n\n"
-                f"Buyer has paid KES {deal.agreed_price:.2f} into secure escrow.\n"
-                f"Please ship the item as agreed.\n\n"
-                f"🔒 **Important Verification Requirement:**\n"
-                f"Your unique delivery code is: **{deal.verification_code}**\n"
-                f"When delivering, write this code on the package and take a photo. "
-                f"Upload the photo here as proof of delivery.\n\n"
-                f"Or reply: 'SHIPPED <courier_tracking_number>'",
-                deal.id
+                "deal_status_alert", components=seller_components, deal_id=deal.id
             )
             logger.info(f"Payment success processed for Deal {deal.id}. Escrow funded.")
         else:
@@ -77,10 +85,18 @@ async def mpesa_stk_callback(request: Request, db: Session = Depends(get_db)):
             deal.status = DealStatus.AWAITING_CONFIRMATION  # reset so they can retry
             db.commit()
 
-            MetaService.send_text_message(
+            buyer_failed_components = [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": deal.item_description[:30]},
+                    {"type": "text", "text": "Payment Failed"},
+                    {"type": "text", "text": f"M-Pesa Payment failed or was cancelled: {result_desc}."},
+                    {"type": "text", "text": "Reply 'CONFIRM' to try again."}
+                ]
+            }]
+            MetaService.send_template_message(
                 db, PlatformType.WHATSAPP, deal.buyer.phone_or_handle,
-                f"❌ M-Pesa Payment failed or was cancelled: {result_desc}. Reply 'CONFIRM' to try again.",
-                deal.id
+                "deal_status_alert", components=buyer_failed_components, deal_id=deal.id
             )
             logger.info(f"Payment failed processed for Deal {deal.id}: {result_desc}")
 
@@ -144,12 +160,20 @@ async def mpesa_b2c_callback(request: Request, db: Session = Depends(get_db)):
             from backend.app.services.rating_service import RatingService
             RatingService.trigger_post_deal_rating(db, deal)
             
-            # Send notifications
+            # Send notifications using templates
             recipient_phone = deal.buyer.phone_or_handle if is_refund else deal.seller.phone_or_handle
-            MetaService.send_text_message(
+            payout_success_components = [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": deal.item_description[:30]},
+                    {"type": "text", "text": "Payout Completed"},
+                    {"type": "text", "text": f"M-Pesa B2C Payout of KES {payment.amount:.2f} completed successfully! Receipt Ref: {conversation_id}."},
+                    {"type": "text", "text": "Thank you for using HoldUntil!"}
+                ]
+            }]
+            MetaService.send_template_message(
                 db, PlatformType.WHATSAPP, recipient_phone,
-                f"💰 M-Pesa B2C Payout of KES {payment.amount:.2f} completed successfully! Receipt Ref: {conversation_id}.",
-                deal.id
+                "deal_status_alert", components=payout_success_components, deal_id=deal.id
             )
             logger.info(f"Processed B2C Deal Payout success callback for Payment {payment.id}")
         else:
@@ -158,10 +182,18 @@ async def mpesa_b2c_callback(request: Request, db: Session = Depends(get_db)):
             db.commit()
             
             recipient_phone = deal.buyer.phone_or_handle if is_refund else deal.seller.phone_or_handle
-            MetaService.send_text_message(
+            payout_failed_components = [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": deal.item_description[:30]},
+                    {"type": "text", "text": "Payout Failed"},
+                    {"type": "text", "text": f"M-Pesa B2C Payout of KES {payment.amount:.2f} failed: {result_desc}."},
+                    {"type": "text", "text": "Our support team has been notified. We will resolve this shortly."}
+                ]
+            }]
+            MetaService.send_template_message(
                 db, PlatformType.WHATSAPP, recipient_phone,
-                f"❌ M-Pesa B2C Payout of KES {payment.amount:.2f} failed: {result_desc}.",
-                deal.id
+                "deal_status_alert", components=payout_failed_components, deal_id=deal.id
             )
             logger.warning(f"B2C Deal Payout failed callback for Payment {payment.id}: {result_desc}")
             

@@ -11,6 +11,19 @@ logger = logging.getLogger("meta_service")
 SYSTEM_BOT_ID = "00000000-0000-0000-0000-000000000000"
 
 class MetaService:
+    APPROVED_TEMPLATES = {
+        "deal_auto_refunded": "APPROVED",
+        "deal_auto_released": "APPROVED",
+        "dispute_appeal_reminder": "APPROVED",
+        "dispute_response_lapsed": "APPROVED",
+        "feedback_rating_prompt": "APPROVED",
+        "dispute_verdict_notification": "APPROVED",
+        "dispute_filed_passive": "APPROVED",
+        "deal_cancelled_passive": "APPROVED",
+        "dispute_resolved_voluntary": "APPROVED",
+        "deal_status_alert": "APPROVED"
+    }
+
     @staticmethod
     def _ensure_bot_user_exists(db: Session) -> str:
         """Ensure the system bot user is present in the database."""
@@ -89,6 +102,12 @@ class MetaService:
         """
         Send a pre-approved Meta utility template message when outside the 24h window.
         """
+        # Validate template approval status
+        status = cls.APPROVED_TEMPLATES.get(template_name, "PENDING")
+        if status != "APPROVED":
+            logger.error(f"Cannot send template '{template_name}': approval status is {status}")
+            return False
+
         bot_id = cls._ensure_bot_user_exists(db)
         
         # Format a descriptive text representation for simulation and logging

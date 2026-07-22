@@ -53,16 +53,28 @@ def run_tier_1_checks(db: Session):
                 buyer_user = deal.buyer
                 DarajaService.initiate_b2c_payout(db, deal, buyer_user.phone_or_handle, deal.agreed_price, is_refund=True)
                 
-                # Notify parties
-                MetaService.send_text_message(
+                # Notify parties using pre-approved WhatsApp templates
+                seller_components = [{
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": deal.item_description[:30]},
+                        {"type": "text", "text": f"{deal.agreed_price:.2f}"}
+                    ]
+                }]
+                MetaService.send_template_message(
                     db, deal.seller.platform, deal.seller.phone_or_handle,
-                    f"⚠️ Deal for '{deal.item_description[:30]}...' was automatically cancelled and refunded because no shipping evidence was submitted by the deadline.",
-                    deal.id
+                    "deal_auto_refunded", components=seller_components, deal_id=deal.id
                 )
-                MetaService.send_text_message(
+                buyer_components = [{
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": deal.item_description[:30]},
+                        {"type": "text", "text": f"{deal.agreed_price:.2f}"}
+                    ]
+                }]
+                MetaService.send_template_message(
                     db, deal.buyer.platform, deal.buyer.phone_or_handle,
-                    f"🎉 You have been refunded KES {deal.agreed_price:.2f} as the seller did not ship by the deadline.",
-                    deal.id
+                    "deal_auto_refunded", components=buyer_components, deal_id=deal.id
                 )
             except Exception as pay_err:
                 logger.error(f"Failed B2C payout for deal {deal.id} auto-refund: {pay_err}")
@@ -105,16 +117,30 @@ def run_tier_1_checks(db: Session):
                 seller_user = deal.seller
                 DarajaService.initiate_b2c_payout(db, deal, seller_user.phone_or_handle, deal.agreed_price, is_refund=False)
                 
-                # Notify parties
-                MetaService.send_text_message(
+                # Notify parties using pre-approved WhatsApp templates
+                seller_components = [{
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": f"{deal.agreed_price:.2f}"},
+                        {"type": "text", "text": deal.item_description[:30]},
+                        {"type": "text", "text": "The buyer was silent past the 48-hour grace period."}
+                    ]
+                }]
+                MetaService.send_template_message(
                     db, deal.seller.platform, deal.seller.phone_or_handle,
-                    f"🎉 Escrow payment of KES {deal.agreed_price:.2f} has been released to you. The buyer was silent past the grace period.",
-                    deal.id
+                    "deal_auto_released", components=seller_components, deal_id=deal.id
                 )
-                MetaService.send_text_message(
+                buyer_components = [{
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": f"{deal.agreed_price:.2f}"},
+                        {"type": "text", "text": deal.item_description[:30]},
+                        {"type": "text", "text": "The grace period expired."}
+                    ]
+                }]
+                MetaService.send_template_message(
                     db, deal.buyer.platform, deal.buyer.phone_or_handle,
-                    f"ℹ️ HoldUntil: Escrow payment of KES {deal.agreed_price:.2f} was auto-released to the seller as the grace period expired.",
-                    deal.id
+                    "deal_auto_released", components=buyer_components, deal_id=deal.id
                 )
             except Exception as pay_err:
                 logger.error(f"Failed B2C payout for deal {deal.id} auto-release: {pay_err}")
@@ -154,9 +180,17 @@ def run_tier_1_checks(db: Session):
         remaining_hours = int(getattr(settings, "APPEAL_WINDOW_HOURS", 72) / 2.0)
         reminder_msg = f"Reminder: You have {remaining_hours} hours remaining to appeal this decision if you disagree. Reply APPEAL to request a senior review (KES 200 fee applies)."
         
-        MetaService.send_text_message(
+        deal = db.query(Deal).filter(Deal.id == d.deal_id).first()
+        reminder_components = [{
+            "type": "body",
+            "parameters": [
+                {"type": "text", "text": str(remaining_hours)},
+                {"type": "text", "text": deal.item_description[:30] if deal else "Deal"}
+            ]
+        }]
+        MetaService.send_template_message(
             db, PlatformType.WHATSAPP, d.filer.phone_or_handle,
-            reminder_msg, d.deal_id
+            "dispute_appeal_reminder", components=reminder_components, deal_id=d.deal_id
         )
         logger.info(f"Sent proactive appeal reminder for Dispute {d.id} to user {d.filer.phone_or_handle}")
 
@@ -180,20 +214,80 @@ def run_tier_1_checks(db: Session):
                 
                 if d.final_outcome == OutcomeType.RELEASE:
                     DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, deal.agreed_price, is_refund=False)
-                    MetaService.send_text_message(db, deal.seller.platform, seller.phone_or_handle, f"Escrow payment of KES {deal.agreed_price:.2f} is being released to you as the appeal window has expired.", deal.id)
-                    MetaService.send_text_message(db, deal.buyer.platform, buyer.phone_or_handle, f"Escrow payment released to seller. Rationale: Appeal window expired.", deal.id)
+                    
+                    seller_components = [{
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": deal.item_description[:30]},
+                            {"type": "text", "text": f"Escrow payment of KES {deal.agreed_price:.2f} is being released to you."},
+                            {"type": "text", "text": "The appeal window expired without appeals."},
+                            {"type": "text", "text": "Thank you for transacting with HoldUntil."}
+                        ]
+                    }]
+                    MetaService.send_template_message(db, deal.seller.platform, seller.phone_or_handle, "dispute_verdict_notification", components=seller_components, deal_id=deal.id)
+                    
+                    buyer_components = [{
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": deal.item_description[:30]},
+                            {"type": "text", "text": "Escrow payment released to seller."},
+                            {"type": "text", "text": "The appeal window expired without appeals."},
+                            {"type": "text", "text": "Thank you for transacting with HoldUntil."}
+                        ]
+                    }]
+                    MetaService.send_template_message(db, deal.buyer.platform, buyer.phone_or_handle, "dispute_verdict_notification", components=buyer_components, deal_id=deal.id)
                 elif d.final_outcome == OutcomeType.REFUND:
                     DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, deal.agreed_price, is_refund=True)
-                    MetaService.send_text_message(db, deal.buyer.platform, buyer.phone_or_handle, f"Escrow refund of KES {deal.agreed_price:.2f} is being processed to you as the appeal window has expired.", deal.id)
-                    MetaService.send_text_message(db, deal.seller.platform, seller.phone_or_handle, f"Escrow funds refunded to buyer. Rationale: Appeal window expired.", deal.id)
+                    
+                    buyer_components = [{
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": deal.item_description[:30]},
+                            {"type": "text", "text": f"Escrow refund of KES {deal.agreed_price:.2f} is being processed to you."},
+                            {"type": "text", "text": "The appeal window expired without appeals."},
+                            {"type": "text", "text": "Thank you for transacting with HoldUntil."}
+                        ]
+                    }]
+                    MetaService.send_template_message(db, deal.buyer.platform, buyer.phone_or_handle, "dispute_verdict_notification", components=buyer_components, deal_id=deal.id)
+                    
+                    seller_components = [{
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": deal.item_description[:30]},
+                            {"type": "text", "text": "Escrow funds refunded to buyer."},
+                            {"type": "text", "text": "The appeal window expired without appeals."},
+                            {"type": "text", "text": "The transaction is closed."}
+                        ]
+                    }]
+                    MetaService.send_template_message(db, deal.seller.platform, seller.phone_or_handle, "dispute_verdict_notification", components=seller_components, deal_id=deal.id)
                 elif d.final_outcome == OutcomeType.PARTIAL_SPLIT:
                     pct = d.partial_split_percentage or 50
                     seller_amt = (pct / 100.0) * deal.agreed_price
                     buyer_amt = deal.agreed_price - seller_amt
                     DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, seller_amt, is_refund=False)
                     DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, buyer_amt, is_refund=True)
-                    MetaService.send_text_message(db, deal.seller.platform, seller.phone_or_handle, f"Escrow split payment of KES {seller_amt:.2f} is being released to you as the appeal window has expired.", deal.id)
-                    MetaService.send_text_message(db, deal.buyer.platform, buyer.phone_or_handle, f"Escrow split refund of KES {buyer_amt:.2f} is being processed to you as the appeal window has expired.", deal.id)
+                    
+                    seller_components = [{
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": deal.item_description[:30]},
+                            {"type": "text", "text": f"Escrow split payment of KES {seller_amt:.2f} is being released to you."},
+                            {"type": "text", "text": "The appeal window expired without appeals."},
+                            {"type": "text", "text": "Thank you for transacting with HoldUntil."}
+                        ]
+                    }]
+                    MetaService.send_template_message(db, deal.seller.platform, seller.phone_or_handle, "dispute_verdict_notification", components=seller_components, deal_id=deal.id)
+                    
+                    buyer_components = [{
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": deal.item_description[:30]},
+                            {"type": "text", "text": f"Escrow split refund of KES {buyer_amt:.2f} is being processed to you."},
+                            {"type": "text", "text": "The appeal window expired without appeals."},
+                            {"type": "text", "text": "Thank you for transacting with HoldUntil."}
+                        ]
+                    }]
+                    MetaService.send_template_message(db, deal.buyer.platform, buyer.phone_or_handle, "dispute_verdict_notification", components=buyer_components, deal_id=deal.id)
                 
                 AIService.apply_dispute_outcome(db, deal, d, d.final_outcome, partial_split_percentage=d.partial_split_percentage)
                 db.commit()
@@ -236,15 +330,19 @@ def run_tier_1_checks(db: Session):
                     non_filer_session["state"] = "IDLE"
                     
             from backend.app.models import PlatformType
-            MetaService.send_text_message(
+            lapsed_components = [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": deal.item_description[:30]}
+                ]
+            }]
+            MetaService.send_template_message(
                 db, PlatformType.WHATSAPP, deal.buyer.phone_or_handle,
-                f"Dispute response window has closed. The dispute for deal '{deal.item_description}' has proceeded to mediator review.",
-                deal.id
+                "dispute_response_lapsed", components=lapsed_components, deal_id=deal.id
             )
-            MetaService.send_text_message(
+            MetaService.send_template_message(
                 db, PlatformType.WHATSAPP, deal.seller.phone_or_handle,
-                f"Dispute response window has closed. The dispute for deal '{deal.item_description}' has proceeded to mediator review.",
-                deal.id
+                "dispute_response_lapsed", components=lapsed_components, deal_id=deal.id
             )
 
 def start_scheduler(SessionLocalFactory):

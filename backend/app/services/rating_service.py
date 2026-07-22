@@ -42,18 +42,30 @@ class RatingService:
         
         if seller:
             USER_SESSIONS[seller.phone_or_handle] = {"state": "AWAITING_RATING", "deal_id": deal.id}
-            MetaService.send_text_message(
+            seller_components = [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": f"Buyer {buyer.phone_or_handle if buyer else 'Buyer'}"},
+                    {"type": "text", "text": deal.item_description[:30]}
+                ]
+            }]
+            MetaService.send_template_message(
                 db, seller.platform, seller.phone_or_handle,
-                f"How was your experience with Buyer {buyer.phone_or_handle if buyer else 'Buyer'}? Reply 👍 or 👎.",
-                deal.id
+                "feedback_rating_prompt", components=seller_components, deal_id=deal.id
             )
             
         if buyer:
             USER_SESSIONS[buyer.phone_or_handle] = {"state": "AWAITING_RATING", "deal_id": deal.id}
-            MetaService.send_text_message(
+            buyer_components = [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": f"Seller {seller.phone_or_handle}"},
+                    {"type": "text", "text": deal.item_description[:30]}
+                ]
+            }]
+            MetaService.send_template_message(
                 db, buyer.platform, buyer.phone_or_handle,
-                f"How was your experience with Seller {seller.phone_or_handle}? Reply 👍 or 👎.",
-                deal.id
+                "feedback_rating_prompt", components=buyer_components, deal_id=deal.id
             )
 
     @classmethod
