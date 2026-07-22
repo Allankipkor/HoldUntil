@@ -1498,3 +1498,48 @@ def get_user_gallery(user_id: str, db: Session = Depends(get_db)):
             "perceptual_hash": p.perceptual_hash
         } for p in photos
     ]
+
+@router.get("/diagnose")
+def diagnose_db(db: Session = Depends(get_db)):
+    """Public diagnostic endpoint to debug live database records."""
+    from backend.app.models import Deal, Dispute, Payment, User
+    
+    deals = db.query(Deal).order_by(Deal.created_at.desc()).limit(5).all()
+    disputes = db.query(Dispute).order_by(Dispute.created_at.desc()).limit(5).all()
+    payments = db.query(Payment).order_by(Payment.created_at.desc()).limit(10).all()
+    users = db.query(User).order_by(User.created_at.desc()).limit(10).all()
+    
+    return {
+        "deals": [{
+            "id": d.id,
+            "item_description": d.item_description,
+            "status": d.status.value if hasattr(d.status, "value") else str(d.status),
+            "created_at": str(d.created_at)
+        } for d in deals],
+        "disputes": [{
+            "id": disp.id,
+            "deal_id": disp.deal_id,
+            "is_appeal": disp.is_appeal,
+            "resolved_at": str(disp.resolved_at) if disp.resolved_at else None,
+            "final_outcome": disp.final_outcome.value if disp.final_outcome and hasattr(disp.final_outcome, "value") else str(disp.final_outcome) if disp.final_outcome else None,
+            "appeal_fee_refund_status": disp.appeal_fee_refund_status,
+            "appeal_requested_by": disp.appeal_requested_by,
+            "appeal_fee_payout_ref": disp.appeal_fee_payout_ref
+        } for disp in disputes],
+        "payments": [{
+            "id": p.id,
+            "deal_id": p.deal_id,
+            "amount": p.amount,
+            "status": p.status.value if hasattr(p.status, "value") else str(p.status),
+            "stk_push_ref": p.stk_push_ref,
+            "c2b_confirmation_ref": p.c2b_confirmation_ref,
+            "created_at": str(p.created_at)
+        } for p in payments],
+        "users": [{
+            "id": u.id,
+            "phone_or_handle": u.phone_or_handle,
+            "role": u.role.value if hasattr(u.role, "value") else str(u.role),
+            "has_password": u.password_hash is not None,
+            "session_token": u.session_token[:6] + "..." if u.session_token else None
+        } for u in users]
+    }
