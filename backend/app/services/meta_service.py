@@ -106,7 +106,7 @@ class MetaService:
         status = cls.APPROVED_TEMPLATES.get(template_name, "PENDING")
         if status != "APPROVED":
             logger.error(f"Cannot send template '{template_name}': approval status is {status}")
-            return False
+            return cls._fallback_to_free_form(db, platform, recipient, template_name, components, deal_id)
 
         bot_id = cls._ensure_bot_user_exists(db)
         
@@ -156,7 +156,74 @@ class MetaService:
             return True
         except Exception as e:
             logger.error(f"Failed to send Meta template message: {e}")
+            return cls._fallback_to_free_form(db, platform, recipient, template_name, components, deal_id)
+
+    @classmethod
+    def _fallback_to_free_form(cls, db: Session, platform: str, recipient: str, template_name: str, components: list = None, deal_id: str = None) -> bool:
+        """
+        Fall back to a free-form text message if the template call fails and 
+        the recipient has messaged the bot within the last 24 hours.
+        """
+        # Find user record
+        user = db.query(User).filter(User.phone_or_handle == recipient).first()
+        if not user:
+            logger.warning(f"Fallback failed: recipient user '{recipient}' not found in database.")
             return False
+
+        # Find the last message sent by this user to the bot (where sender_id == user.id)
+        last_incoming = db.query(ChatLog).filter(
+            ChatLog.sender_id == user.id
+        ).order_by(ChatLog.timestamp.desc()).first()
+
+        if not last_incoming:
+            logger.warning(f"Fallback skipped: no incoming message found for user '{recipient}'.")
+            return False
+
+        # Check if the last incoming message is within 24 hours
+        time_diff = datetime.now(UTC).replace(tzinfo=None) - last_incoming.timestamp
+        if time_diff.total_seconds() > 24 * 3600:
+            logger.warning(f"Fallback skipped: user '{recipient}' last messaged {time_diff.total_seconds()/3600:.1f} hours ago (outside 24h window).")
+            return False
+
+        # Extract parameters from components
+        params = []
+        if components:
+            for comp in components:
+                if comp.get("type") == "body":
+                    for param in comp.get("parameters", []):
+                        params.append(param.get("text", ""))
+
+        # Reconstruct message body based on template_name
+        message_text = ""
+        try:
+            if template_name == "deal_auto_refunded":
+                message_text = f"⏰ Deal '{params[0]}' has been auto-refunded. KES {params[1]} is being returned to the buyer because the delivery deadline passed without verification."
+            elif template_name == "deal_auto_released":
+                message_text = f"⏰ Deal '{params[0]}' has been auto-completed. KES {params[1]} has been released to the seller because the buyer's 48-hour confirmation window lapsed."
+            elif template_name == "dispute_appeal_reminder":
+                message_text = f"⚠️ Reminder: You have 12 hours remaining to appeal the mediator's verdict for deal '{params[0]}'. Reply APPEAL to proceed."
+            elif template_name == "dispute_response_lapsed":
+                message_text = f"⏰ Dispute response deadline lapsed for deal '{params[0]}'. The non-responding party ({params[1]}) has been auto-resolved as lost."
+            elif template_name == "feedback_rating_prompt":
+                message_text = f"⭐ Transaction Complete!\n\nPlease rate your experience with the {params[1]} for deal '{params[0]}'. Reply with a number 1 to 5."
+            elif template_name == "dispute_verdict_notification":
+                message_text = f"⚖️ Dispute Verdict Alert for '{params[0]}':\n\nDecision: {params[1]}\nRationale: {params[2]}\n\n{params[3]}"
+            elif template_name == "dispute_filed_passive":
+                message_text = f"⚠️ The other party has filed a dispute for '{params[0]}'.\n\nReason: {params[1]}\n\nPlease respond with your statement and evidence within {params[2]} hours."
+            elif template_name == "deal_cancelled_passive":
+                message_text = f"❌ Transaction Alert for '{params[0]}':\n\n{params[1]}"
+            elif template_name == "dispute_resolved_voluntary":
+                message_text = f"🤝 Dispute Resolved for '{params[0]}':\n\n{params[1]}"
+            elif template_name == "deal_status_alert":
+                message_text = f"ℹ️ Deal Status Update for *{params[0]}*:\nStatus: {params[1]}\nDetails: {params[2]}\nNext Step: {params[3]}"
+            else:
+                message_text = f"Notification alert for deal: {', '.join(params)}"
+        except IndexError:
+            logger.error(f"Failed to reconstruct template fallback text for {template_name} (insufficient parameters: {params})")
+            return False
+
+        logger.info(f"Fallback triggered: sending free-form message to '{recipient}' within 24h window: {message_text}")
+        return cls.send_text_message(db, platform, recipient, message_text, deal_id)
 
     @classmethod
     def send_media_message(cls, db: Session, platform: str, recipient: str, media_url: str, caption: str = None, deal_id: str = None) -> bool:
