@@ -249,89 +249,11 @@ def resolve_dispute_manually(
         dispute.resolved_at = datetime.now(UTC).replace(tzinfo=None)
         dispute.resolution_statement = reasoning
         
-        # Trigger immediate payouts for appeal (second-instance) using templates
-        if outcome == "release":
-            DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, deal.agreed_price, is_refund=False)
-            
-            seller_components = [{
-                "type": "body",
-                "parameters": [
-                    {"type": "text", "text": deal.item_description[:30]},
-                    {"type": "text", "text": f"Senior Arbitrator released KES {deal.agreed_price:.2f} to your account."},
-                    {"type": "text", "text": reasoning},
-                    {"type": "text", "text": "Final appeal verdict decision applied."}
-                ]
-            }]
-            MetaService.send_template_message(db, PlatformType.WHATSAPP, seller.phone_or_handle, "dispute_verdict_notification", components=seller_components, deal_id=deal.id)
-            
-            buyer_components = [{
-                "type": "body",
-                "parameters": [
-                    {"type": "text", "text": deal.item_description[:30]},
-                    {"type": "text", "text": "Senior Arbitrator released funds to the seller."},
-                    {"type": "text", "text": reasoning},
-                    {"type": "text", "text": "Final appeal verdict decision applied."}
-                ]
-            }]
-            MetaService.send_template_message(db, PlatformType.WHATSAPP, buyer.phone_or_handle, "dispute_verdict_notification", components=buyer_components, deal_id=deal.id)
-            
-        elif outcome == "refund":
-            DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, deal.agreed_price, is_refund=True)
-            
-            buyer_components = [{
-                "type": "body",
-                "parameters": [
-                    {"type": "text", "text": deal.item_description[:30]},
-                    {"type": "text", "text": f"Senior Arbitrator refunded KES {deal.agreed_price:.2f} to your account."},
-                    {"type": "text", "text": reasoning},
-                    {"type": "text", "text": "Final appeal verdict decision applied."}
-                ]
-            }]
-            MetaService.send_template_message(db, PlatformType.WHATSAPP, buyer.phone_or_handle, "dispute_verdict_notification", components=buyer_components, deal_id=deal.id)
-            
-            seller_components = [{
-                "type": "body",
-                "parameters": [
-                    {"type": "text", "text": deal.item_description[:30]},
-                    {"type": "text", "text": "Senior Arbitrator refunded funds to the buyer."},
-                    {"type": "text", "text": reasoning},
-                    {"type": "text", "text": "Final appeal verdict decision applied."}
-                ]
-            }]
-            MetaService.send_template_message(db, PlatformType.WHATSAPP, seller.phone_or_handle, "dispute_verdict_notification", components=seller_components, deal_id=deal.id)
-            
-        elif outcome == "partial_split":
-            pct = partial_split_percentage or 50
-            seller_amt = (pct / 100.0) * deal.agreed_price
-            buyer_amt = deal.agreed_price - seller_amt
-            
-            DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, seller_amt, is_refund=False)
-            DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, buyer_amt, is_refund=True)
-            
-            seller_components = [{
-                "type": "body",
-                "parameters": [
-                    {"type": "text", "text": deal.item_description[:30]},
-                    {"type": "text", "text": f"Partial Split ({pct}% to seller)."},
-                    {"type": "text", "text": reasoning},
-                    {"type": "text", "text": "Payout processing. Final appeal verdict decision applied."}
-                ]
-            }]
-            MetaService.send_template_message(db, PlatformType.WHATSAPP, seller.phone_or_handle, "dispute_verdict_notification", components=seller_components, deal_id=deal.id)
-            
-            buyer_components = [{
-                "type": "body",
-                "parameters": [
-                    {"type": "text", "text": deal.item_description[:30]},
-                    {"type": "text", "text": f"Partial Split ({100-pct}% to buyer)."},
-                    {"type": "text", "text": reasoning},
-                    {"type": "text", "text": "Refund processing. Final appeal verdict decision applied."}
-                ]
-            }]
-            MetaService.send_template_message(db, PlatformType.WHATSAPP, buyer.phone_or_handle, "dispute_verdict_notification", components=buyer_components, deal_id=deal.id)
-
-        # 2. Check if appeal fee is refundable (overturned)
-        if first_instance_outcome and first_instance_outcome != OutcomeType(outcome):
+        # Check if appeal fee is refundable (overturned)
+        is_overturned = (first_instance_outcome and first_instance_outcome != OutcomeType(outcome))
+        appeal_filer = db.query(User).filter(User.id == dispute.appeal_requested_by).first()
+        
+        if is_overturned:
             dispute.appeal_fee_refund_status = "pending"
             db.commit()
             
@@ -344,31 +266,129 @@ def resolve_dispute_manually(
                 db.commit()
             else:
                 from backend.app.database import SessionLocal
-                if background_tasks:
-                    background_tasks.add_task(
-                        DarajaService.initiate_appeal_fee_refund,
-                        SessionLocal,
-                        dispute.id,
-                        filer.phone_or_handle
-                    )
-                else:
-                    import threading
-                    t = threading.Thread(
-                        target=DarajaService.initiate_appeal_fee_refund,
-                        args=(SessionLocal, dispute.id, filer.phone_or_handle)
-                    )
-                    t.start()
+                if appeal_filer:
+                    if background_tasks:
+                        background_tasks.add_task(
+                            DarajaService.initiate_appeal_fee_refund,
+                            SessionLocal,
+                            dispute.id,
+                            appeal_filer.phone_or_handle
+                        )
+                    else:
+                        import threading
+                        t = threading.Thread(
+                            target=DarajaService.initiate_appeal_fee_refund,
+                            args=(SessionLocal, dispute.id, appeal_filer.phone_or_handle)
+                        )
+                        t.start()
+        else:
+            dispute.appeal_fee_refund_status = "retained"
+            db.commit()
+
+        # Determine appeal fee message details
+        buyer_fee_text = ""
+        seller_fee_text = ""
+        
+        if appeal_filer:
+            if is_overturned:
+                fee_filer_msg = "Refunded to you, since your appeal was successful."
+                fee_other_msg = "Not applicable (appeal filed by other party)."
+            else:
+                fee_filer_msg = "Retained, since the original decision was upheld."
+                fee_other_msg = "Not applicable (appeal filed by other party)."
                 
-            fee_refund_components = [{
+            buyer_fee_text = fee_filer_msg if buyer.id == appeal_filer.id else fee_other_msg
+            seller_fee_text = fee_filer_msg if seller.id == appeal_filer.id else fee_other_msg
+
+        # Trigger immediate payouts for appeal (second-instance) using templates
+        if outcome == "release":
+            DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, deal.agreed_price, is_refund=False)
+            
+            buyer_fee_part = f"\n\nAppeal fee: {buyer_fee_text}" if buyer_fee_text else ""
+            seller_fee_part = f"\n\nAppeal fee: {seller_fee_text}" if seller_fee_text else ""
+            
+            seller_components = [{
                 "type": "body",
                 "parameters": [
                     {"type": "text", "text": deal.item_description[:30]},
-                    {"type": "text", "text": "Appeal fee refund is processing."},
-                    {"type": "text", "text": "Your appeal was successful and the first-instance decision has been overturned."},
-                    {"type": "text", "text": "Refund amount: KES 200.00."}
+                    {"type": "text", "text": f"Release to seller (100%) — KES {deal.agreed_price:.2f}"},
+                    {"type": "text", "text": reasoning},
+                    {"type": "text", "text": f"Payout processing. Final appeal verdict decision applied.{seller_fee_part}"}
                 ]
             }]
-            MetaService.send_template_message(db, PlatformType.WHATSAPP, filer.phone_or_handle, "dispute_verdict_notification", components=fee_refund_components, deal_id=deal.id)
+            MetaService.send_template_message(db, PlatformType.WHATSAPP, seller.phone_or_handle, "dispute_verdict_notification", components=seller_components, deal_id=deal.id)
+            
+            buyer_components = [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": deal.item_description[:30]},
+                    {"type": "text", "text": f"Release to seller (100%) — KES {deal.agreed_price:.2f}"},
+                    {"type": "text", "text": reasoning},
+                    {"type": "text", "text": f"Funds released to the seller. Final appeal verdict decision applied.{buyer_fee_part}"}
+                ]
+            }]
+            MetaService.send_template_message(db, PlatformType.WHATSAPP, buyer.phone_or_handle, "dispute_verdict_notification", components=buyer_components, deal_id=deal.id)
+            
+        elif outcome == "refund":
+            DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, deal.agreed_price, is_refund=True)
+            
+            buyer_fee_part = f"\n\nAppeal fee: {buyer_fee_text}" if buyer_fee_text else ""
+            seller_fee_part = f"\n\nAppeal fee: {seller_fee_text}" if seller_fee_text else ""
+            
+            buyer_components = [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": deal.item_description[:30]},
+                    {"type": "text", "text": f"Refund buyer (100%) — KES {deal.agreed_price:.2f}"},
+                    {"type": "text", "text": reasoning},
+                    {"type": "text", "text": f"Refund processing. Final appeal verdict decision applied.{buyer_fee_part}"}
+                ]
+            }]
+            MetaService.send_template_message(db, PlatformType.WHATSAPP, buyer.phone_or_handle, "dispute_verdict_notification", components=buyer_components, deal_id=deal.id)
+            
+            seller_components = [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": deal.item_description[:30]},
+                    {"type": "text", "text": f"Refund buyer (100%) — KES {deal.agreed_price:.2f}"},
+                    {"type": "text", "text": reasoning},
+                    {"type": "text", "text": f"Funds refunded to the buyer. Final appeal verdict decision applied.{seller_fee_part}"}
+                ]
+            }]
+            MetaService.send_template_message(db, PlatformType.WHATSAPP, seller.phone_or_handle, "dispute_verdict_notification", components=seller_components, deal_id=deal.id)
+            
+        elif outcome == "partial_split":
+            pct = partial_split_percentage or 50
+            seller_amt = (pct / 100.0) * deal.agreed_price
+            buyer_amt = deal.agreed_price - seller_amt
+            
+            DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, seller_amt, is_refund=False)
+            DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, buyer_amt, is_refund=True)
+            
+            buyer_fee_part = f"\n\nAppeal fee: {buyer_fee_text}" if buyer_fee_text else ""
+            seller_fee_part = f"\n\nAppeal fee: {seller_fee_text}" if seller_fee_text else ""
+            
+            seller_components = [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": deal.item_description[:30]},
+                    {"type": "text", "text": f"Partial Split ({pct}% to seller) — KES {deal.agreed_price:.2f}"},
+                    {"type": "text", "text": reasoning},
+                    {"type": "text", "text": f"Payout processing. Final appeal verdict decision applied.{seller_fee_part}"}
+                ]
+            }]
+            MetaService.send_template_message(db, PlatformType.WHATSAPP, seller.phone_or_handle, "dispute_verdict_notification", components=seller_components, deal_id=deal.id)
+            
+            buyer_components = [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": deal.item_description[:30]},
+                    {"type": "text", "text": f"Partial Split ({100-pct}% to buyer) — KES {deal.agreed_price:.2f}"},
+                    {"type": "text", "text": reasoning},
+                    {"type": "text", "text": f"Refund processing. Final appeal verdict decision applied.{buyer_fee_part}"}
+                ]
+            }]
+            MetaService.send_template_message(db, PlatformType.WHATSAPP, buyer.phone_or_handle, "dispute_verdict_notification", components=buyer_components, deal_id=deal.id)
             
         # Adjust trust scores and win rates
         AIService.apply_dispute_outcome(
