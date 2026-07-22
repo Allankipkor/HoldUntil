@@ -80,6 +80,8 @@ class User(Base):
     dispute_win_rate = Column(Float, default=0.0)
     ai_overturn_flag_count = Column(Integer, default=0)
     role = Column(SQLEnum(UserRole), default=UserRole.USER, nullable=False)
+    password_hash = Column(String(100), nullable=True)
+    session_token = Column(String(100), nullable=True)
     created_at = Column(DateTime, default=utcnow)
 
     # Relationships
@@ -153,6 +155,10 @@ class Dispute(Base):
     escalation_requested_by = Column(String(36), ForeignKey("users.id"), nullable=True)
     escalation_fee_paid = Column(Boolean, default=False)
     
+    # First-instance tracking (preserved after appeal)
+    first_instance_outcome = Column(SQLEnum(OutcomeType), nullable=True)
+    first_instance_statement = Column(Text, nullable=True)
+
     # Final Outcome (determined by AI or Human moderator)
     final_outcome = Column(SQLEnum(OutcomeType), nullable=True)
     resolution_method = Column(SQLEnum(ResolutionMethod), nullable=True)

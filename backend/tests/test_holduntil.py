@@ -1229,3 +1229,57 @@ def test_mediator_save_resolution_and_scheduler_lapsed_payout(db_session):
     assert payment is not None
     assert payment.status == PaymentStatus.REFUND_COMPLETED
 
+
+def test_staff_portal_authentication_and_scoping(db_session):
+    """Test staff authentication login, logout, and role-scoping behavior."""
+    from backend.app.routes.dashboard import login_staff, get_disputes_queue
+    from backend.app.models import User, UserRole, Dispute, Deal, DealStatus
+    
+    # 1. Seed staff users in test DB
+    import hashlib
+    from backend.app.models import PlatformType
+    mod = User(phone_or_handle="MOD_1", role=UserRole.MODERATOR, platform=PlatformType.WHATSAPP, password_hash=hashlib.sha256(b"moderator123").hexdigest())
+    arb = User(phone_or_handle="ARB_1", role=UserRole.ARBITRATOR, platform=PlatformType.WHATSAPP, password_hash=hashlib.sha256(b"arbitrator123").hexdigest())
+    admin = User(phone_or_handle="ADMIN_1", role=UserRole.ADMIN, platform=PlatformType.WHATSAPP, password_hash=hashlib.sha256(b"admin123").hexdigest())
+    db_session.add_all([mod, arb, admin])
+    db_session.commit()
+    
+    # 2. Login as moderator
+    login_res = login_staff(username="MOD_1", password="moderator123", db=db_session)
+    assert "token" in login_res
+    assert login_res["user"]["phone_or_handle"] == "MOD_1"
+    assert login_res["user"]["role"] == "moderator"
+    
+    token = login_res["token"]
+    db_session.refresh(mod)
+    assert mod.session_token == token
+    
+    # 3. Test get_disputes_queue with moderator (should filter by MOD_1 and is_appeal=False)
+    deal1 = Deal(seller_id="s1", buyer_id="b1", item_description="Test Item 1", agreed_price=1000, status=DealStatus.DISPUTED)
+    deal2 = Deal(seller_id="s2", buyer_id="b2", item_description="Test Item 2", agreed_price=2000, status=DealStatus.DISPUTED)
+    db_session.add_all([deal1, deal2])
+    db_session.commit()
+    
+    disp1 = Dispute(deal_id=deal1.id, filed_by="b1", reason="damaged", is_appeal=False, human_moderator_id=mod.id)
+    disp2 = Dispute(deal_id=deal2.id, filed_by="b2", reason="appeal", is_appeal=True, assigned_arbitrator_id=arb.id)
+    db_session.add_all([disp1, disp2])
+    db_session.commit()
+    
+    # Run queue for moderator
+    mod_queue = get_disputes_queue(current_user=mod, db=db_session)
+    # Moderator should only see disp1
+    assert len(mod_queue) == 1
+    assert mod_queue[0]["id"] == disp1.id
+    
+    # Run queue for arbitrator
+    arb_queue = get_disputes_queue(current_user=arb, db=db_session)
+    # Arbitrator should only see disp2
+    assert len(arb_queue) == 1
+    assert arb_queue[0]["id"] == disp2.id
+    
+    # Run queue for admin
+    admin_queue = get_disputes_queue(current_user=admin, db=db_session)
+    # Admin should see both
+    assert len(admin_queue) == 2
+
+

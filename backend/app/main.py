@@ -48,12 +48,24 @@ async def lifespan(app: FastAPI):
             if 'payout_mpesa_number' not in columns:
                 conn.execute(text("ALTER TABLE users ADD COLUMN payout_mpesa_number VARCHAR(20)"))
                 logger.info("Added payout_mpesa_number column to users table.")
+            if 'password_hash' not in columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(100)"))
+                logger.info("Added password_hash column to users table.")
+            if 'session_token' not in columns:
+                conn.execute(text("ALTER TABLE users ADD COLUMN session_token VARCHAR(100)"))
+                logger.info("Added session_token column to users table.")
             
             # Auto-migrate SQLite disputes table for new fields
             columns_disputes = [col['name'] for col in inspector.get_columns('disputes')]
             if 'resolution_statement' not in columns_disputes:
                 conn.execute(text("ALTER TABLE disputes ADD COLUMN resolution_statement TEXT"))
                 logger.info("Added resolution_statement column to disputes table.")
+            if 'first_instance_outcome' not in columns_disputes:
+                conn.execute(text("ALTER TABLE disputes ADD COLUMN first_instance_outcome VARCHAR(50)"))
+                logger.info("Added first_instance_outcome column to disputes table.")
+            if 'first_instance_statement' not in columns_disputes:
+                conn.execute(text("ALTER TABLE disputes ADD COLUMN first_instance_statement TEXT"))
+                logger.info("Added first_instance_statement column to disputes table.")
     except Exception as migration_err:
         logger.error(f"Error running database table migration: {migration_err}")
     
@@ -61,6 +73,7 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         from backend.app.models import User, UserRole
+        import hashlib
         staff = [
             ("MOD_1", UserRole.MODERATOR),
             ("ARB_1", UserRole.ARBITRATOR),
@@ -68,12 +81,22 @@ async def lifespan(app: FastAPI):
         ]
         for phone, role in staff:
             exists = db.query(User).filter(User.phone_or_handle == phone).first()
-            if not exists:
+            pwd = "moderator123" if role == UserRole.MODERATOR else ("arbitrator123" if role == UserRole.ARBITRATOR else "admin123")
+            expected_hash = hashlib.sha256(pwd.encode('utf-8')).hexdigest()
+            
+            if exists:
+                # Update role and password if needed
+                if not exists.password_hash or exists.role != role:
+                    exists.password_hash = expected_hash
+                    exists.role = role
+                    logger.info(f"Updated staff user credentials: {phone}")
+            else:
                 user = User(
                     phone_or_handle=phone,
                     role=role,
                     platform=PlatformType.WHATSAPP,
-                    trust_score=100.0
+                    trust_score=100.0,
+                    password_hash=expected_hash
                 )
                 db.add(user)
                 logger.info(f"Seeded staff user: {phone} as {role.value}")

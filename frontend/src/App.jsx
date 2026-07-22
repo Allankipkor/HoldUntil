@@ -7,15 +7,34 @@ import {
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
-if (API_BASE) {
-  const originalFetch = window.fetch;
-  window.fetch = async (url, options) => {
-    if (typeof url === "string" && url.startsWith("/api")) {
-      url = `${API_BASE}${url}`;
+const originalFetch = window.fetch;
+window.fetch = async (url, options = {}) => {
+  let targetUrl = url;
+  if (typeof url === "string" && url.startsWith("/api")) {
+    if (API_BASE) {
+      targetUrl = `${API_BASE}${url}`;
     }
-    return originalFetch(url, options);
-  };
-}
+  }
+  
+  const token = localStorage.getItem("staff_token");
+  if (token && typeof url === "string" && url.includes("/api/")) {
+    if (!options.headers) {
+      options.headers = {};
+    }
+    // Check if headers is Headers instance or plain object
+    if (options.headers instanceof Headers) {
+      if (!options.headers.has("Authorization")) {
+        options.headers.append("Authorization", `Bearer ${token}`);
+      }
+    } else {
+      if (!options.headers["Authorization"]) {
+        options.headers["Authorization"] = `Bearer ${token}`;
+      }
+    }
+  }
+  
+  return originalFetch(targetUrl, options);
+};
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('sandbox');
@@ -78,6 +97,34 @@ export default function App() {
   const [selectedGalleryPhotoId, setSelectedGalleryPhotoId] = useState('');
   const [evidenceSourceType, setEvidenceSourceType] = useState('live'); // 'live' or 'gallery'
 
+  // Staff Authentication State
+  const [staffUser, setStaffUser] = useState(() => {
+    try {
+      const u = localStorage.getItem("staff_user");
+      return u ? JSON.parse(u) : null;
+    } catch (e) {
+      return null;
+    }
+  });
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+
+  // General Case History Search & Filtering
+  const [disputeSearchQuery, setDisputeSearchQuery] = useState('');
+  const [disputeSearchStatus, setDisputeSearchStatus] = useState('all');
+  const [disputeStartDate, setDisputeStartDate] = useState('');
+  const [disputeEndDate, setDisputeEndDate] = useState('');
+
+  // Staff Management State
+  const [staffMembers, setStaffMembers] = useState([]);
+  const [staffLoading, setStaffLoading] = useState(false);
+  const [newStaffUsername, setNewStaffUsername] = useState('');
+  const [newStaffRole, setNewStaffRole] = useState('moderator');
+  const [newStaffPassword, setNewStaffPassword] = useState('');
+  const [staffError, setStaffError] = useState('');
+
   // Admin State
   const [users, setUsers] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
@@ -85,7 +132,10 @@ export default function App() {
     MIN_TRADES_FOR_PROFILE_STATS: 3,
     MIN_DEALS_FOR_BADGE: 10,
     APPEAL_WINDOW_HOURS: 24,
-    DISPUTE_RESPONSE_WINDOW_HOURS: 24
+    DISPUTE_RESPONSE_WINDOW_HOURS: 24,
+    ESCALATION_FEE_KES: 200,
+    SLA_BREACH_HOURS: 72,
+    SLA_WARN_HOURS: 48
   });
   const [settingsLoading, setSettingsLoading] = useState(false);
 
@@ -100,13 +150,16 @@ export default function App() {
 
   // Load disputes queue on active tab change
   useEffect(() => {
-    if (activeTab === 'moderator') {
+    if (activeTab === 'moderator' && staffUser) {
       fetchDisputes();
       fetchMetrics();
       fetchUsers();
-    } else if (activeTab === 'admin') {
+    } else if (activeTab === 'admin' && staffUser) {
       fetchUsers();
       fetchSettings();
+      if (staffUser.role === 'admin') {
+        fetchStaffMembers();
+      }
     } else if (activeTab === 'gallery') {
       fetchUsers();
       fetchGallery();
@@ -114,7 +167,14 @@ export default function App() {
       fetchUsers();
       fetchGallery();
     }
-  }, [activeTab]);
+  }, [activeTab, staffUser]);
+
+  // Re-fetch disputes when filters/search changes
+  useEffect(() => {
+    if (activeTab === 'moderator' && staffUser) {
+      fetchDisputes();
+    }
+  }, [disputeSearchStatus, disputeSearchQuery, disputeStartDate, disputeEndDate]);
 
   // Synchronize resolver preselection dynamically
   useEffect(() => {
@@ -156,6 +216,112 @@ export default function App() {
       }
     } catch (e) {
       console.warn("Failed to fetch system metrics.");
+    }
+  };
+
+  const fetchStaffMembers = async () => {
+    setStaffLoading(true);
+    try {
+      const res = await fetch('/api/dashboard/staff');
+      if (res.ok) {
+        const data = await res.json();
+        setStaffMembers(data);
+      }
+    } catch (e) {
+      console.error("Failed to fetch staff members", e);
+    } finally {
+      setStaffLoading(false);
+    }
+  };
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoginError('');
+    setLoginLoading(true);
+    try {
+      const fd = new FormData();
+      fd.append("username", loginUsername);
+      fd.append("password", loginPassword);
+      const res = await fetch('/api/dashboard/auth/login', {
+        method: 'POST',
+        body: fd
+      });
+      if (res.ok) {
+        const data = await res.json();
+        localStorage.setItem("staff_token", data.token);
+        localStorage.setItem("staff_user", JSON.stringify(data.user));
+        setStaffUser(data.user);
+        setLoginUsername('');
+        setLoginPassword('');
+        // Refresh dashboard data
+        fetchDisputes();
+        fetchMetrics();
+        fetchUsers();
+        if (data.user.role === 'admin') {
+          fetchSettings();
+          fetchStaffMembers();
+        }
+      } else {
+        const err = await res.json();
+        setLoginError(err.detail || "Invalid credentials.");
+      }
+    } catch (err) {
+      setLoginError("Connection error.");
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/dashboard/auth/logout', { method: 'POST' });
+    } catch (e) {}
+    localStorage.removeItem("staff_token");
+    localStorage.removeItem("staff_user");
+    setStaffUser(null);
+    setSelectedDisputeId(null);
+    setSelectedDisputeDetails(null);
+  };
+
+  const handleAddStaff = async (e) => {
+    e.preventDefault();
+    setStaffError('');
+    try {
+      const fd = new FormData();
+      fd.append("username", newStaffUsername);
+      fd.append("role", newStaffRole);
+      fd.append("password", newStaffPassword);
+      const res = await fetch('/api/dashboard/staff', {
+        method: 'POST',
+        body: fd
+      });
+      if (res.ok) {
+        alert("Staff user added successfully.");
+        setNewStaffUsername('');
+        setNewStaffPassword('');
+        fetchStaffMembers();
+      } else {
+        const err = await res.json();
+        setStaffError(err.detail || "Failed to add staff.");
+      }
+    } catch (err) {
+      setStaffError("Connection error.");
+    }
+  };
+
+  const handleRemoveStaff = async (id) => {
+    if (!confirm("Are you sure you want to remove this staff user?")) return;
+    try {
+      const res = await fetch(`/api/dashboard/staff/${id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        fetchStaffMembers();
+      } else {
+        alert("Failed to remove staff.");
+      }
+    } catch (err) {
+      alert("Connection error.");
     }
   };
 
@@ -296,6 +462,9 @@ export default function App() {
       formData.append("min_deals_for_badge", systemSettings.MIN_DEALS_FOR_BADGE);
       formData.append("appeal_window_hours", systemSettings.APPEAL_WINDOW_HOURS || 24);
       formData.append("dispute_response_window_hours", systemSettings.DISPUTE_RESPONSE_WINDOW_HOURS || 24);
+      formData.append("escalation_fee_kes", systemSettings.ESCALATION_FEE_KES || 200);
+      formData.append("sla_breach_hours", systemSettings.SLA_BREACH_HOURS || 72);
+      formData.append("sla_warn_hours", systemSettings.SLA_WARN_HOURS || 48);
       
       const res = await fetch('/api/dashboard/settings', {
         method: 'POST',
@@ -412,7 +581,7 @@ export default function App() {
       formData.append("outcome", modOutcome);
       formData.append("partial_split_percentage", modSplitPct);
       formData.append("reasoning", moderatorReasoning);
-      formData.append("resolver_id", resolverId);
+      formData.append("resolver_id", staffUser ? staffUser.phone_or_handle : resolverId);
 
       const res = await fetch(`/api/dashboard/disputes/${selectedDisputeId}/resolve`, {
         method: 'POST',
@@ -829,6 +998,129 @@ export default function App() {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatLogs]);
 
+  const renderTrendChart = () => {
+    if (!metrics.trend || metrics.trend.length === 0) {
+      return (
+        <div style={{ background: 'var(--bg-panel)', padding: '20px', borderRadius: '8px', border: '1px solid var(--border-muted)', textAlign: 'center' }}>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0 }}>No resolved disputes yet to display agreement rate trend.</p>
+        </div>
+      );
+    }
+
+    const data = metrics.trend;
+    const height = 140;
+    const width = 500;
+    const padding = 30;
+
+    const points = data.map((d, i) => {
+      const x = padding + (i / Math.max(1, data.length - 1)) * (width - 2 * padding);
+      const y = height - padding - (d.agreement_rate / 100) * (height - 2 * padding);
+      return { x, y, ...d };
+    });
+
+    const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+
+    return (
+      <div className="glass-card" style={{ padding: '20px' }}>
+        <h3 style={{ fontSize: '1.1rem', marginBottom: '16px' }}>AI recommendation-vs-human agreement rate trend</h3>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px', alignItems: 'center' }}>
+          <div>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '8px' }}>Current agreement rate:</p>
+            <b style={{ fontSize: '2.5rem', color: 'var(--primary)', lineHeight: 1 }}>{metrics.ai_agreement_rate_pct}%</b>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '8px' }}>Based on a total of {metrics.total_disputes} resolved AI-assisted disputes.</p>
+          </div>
+          <div style={{ background: 'rgba(0,0,0,0.1)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-muted)' }}>
+            <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: 'auto', overflow: 'visible' }}>
+              {/* Y Axis Grid lines */}
+              {[0, 25, 50, 75, 100].map(val => {
+                const y = height - padding - (val / 100) * (height - 2 * padding);
+                return (
+                  <g key={val}>
+                    <line x1={padding} y1={y} x2={width - padding} y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="3" />
+                    <text x={padding - 5} y={y + 3} fill="var(--text-muted)" fontSize="8" textAnchor="end">{val}%</text>
+                  </g>
+                );
+              })}
+              {/* Line */}
+              {points.length > 1 && (
+                <path d={linePath} fill="none" stroke="var(--primary)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+              )}
+              {/* Points */}
+              {points.map((p, idx) => (
+                <g key={idx}>
+                  <circle cx={p.x} cy={p.y} r="4" fill="var(--bg-panel)" stroke="var(--primary)" strokeWidth="2" />
+                  <title>{`Case #${p.case_number}: ${p.agreement_rate}% (${p.resolved_at})`}</title>
+                </g>
+              ))}
+            </svg>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderLoginForm = () => {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 'calc(100vh - 250px)' }}>
+        <div className="glass-card" style={{ padding: '32px', width: '100%', maxWidth: '400px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <div style={{ textAlign: 'center', borderBottom: '1px solid var(--border-muted)', paddingBottom: '16px' }}>
+            <Lock size={36} color="var(--primary)" style={{ margin: '0 auto 12px auto' }} />
+            <h3 style={{ fontSize: '1.25rem', color: 'white', margin: 0 }}>Staff Member Portal</h3>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>Please authenticate to access role-scoped queue</p>
+          </div>
+          
+          {loginError && (
+            <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', color: '#EF4444', padding: '10px', borderRadius: '6px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <ShieldAlert size={16} />
+              <span>{loginError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div>
+              <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>Staff Username</label>
+              <input 
+                type="text" 
+                value={loginUsername} 
+                onChange={(e) => setLoginUsername(e.target.value)} 
+                placeholder="e.g. MOD_1, ARB_1, ADMIN_1" 
+                className="form-input" 
+                required 
+                style={{ width: '100%' }}
+              />
+            </div>
+
+            <div>
+              <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>Password</label>
+              <input 
+                type="password" 
+                value={loginPassword} 
+                onChange={(e) => setLoginPassword(e.target.value)} 
+                placeholder="••••••••" 
+                className="form-input" 
+                required 
+                style={{ width: '100%' }}
+              />
+            </div>
+
+            <button type="submit" disabled={loginLoading} className="btn btn-primary" style={{ width: '100%', padding: '12px', marginTop: '8px' }}>
+              {loginLoading ? "Verifying Credentials..." : "Access Dashboard"}
+            </button>
+          </form>
+
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.02)', padding: '10px', borderRadius: '6px', border: '1px solid var(--border-muted)' }}>
+            <b>Demo Credentials (Seeded):</b>
+            <ul style={{ paddingLeft: '14px', marginTop: '4px' }}>
+              <li>Moderator: <code>MOD_1</code> / <code>moderator123</code></li>
+              <li>Arbitrator: <code>ARB_1</code> / <code>arbitrator123</code></li>
+              <li>Admin: <code>ADMIN_1</code> / <code>admin123</code></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: 'var(--bg-main)' }}>
       {/* HEADER */}
@@ -843,24 +1135,32 @@ export default function App() {
           </div>
         </div>
         
-        {/* TABS */}
-        <nav style={{ display: 'flex', gap: '8px' }}>
-          <button onClick={() => setActiveTab('verify')} className={`btn ${activeTab === 'verify' ? 'btn-primary' : 'btn-secondary'}`}>
-            <Search size={16} /> Seller lookup
-          </button>
-          <button onClick={() => setActiveTab('sandbox')} className={`btn ${activeTab === 'sandbox' ? 'btn-primary' : 'btn-secondary'}`}>
-            <Smartphone size={16} /> Chat Sandbox
-          </button>
-          <button onClick={() => setActiveTab('gallery')} className={`btn ${activeTab === 'gallery' ? 'btn-primary' : 'btn-secondary'}`}>
-            <Camera size={16} /> In-App Gallery
-          </button>
-          <button onClick={() => setActiveTab('moderator')} className={`btn ${activeTab === 'moderator' ? 'btn-primary' : 'btn-secondary'}`}>
-            <Gavel size={16} /> Disputes Queue {disputes.length > 0 && <span style={{ background: 'var(--accent-red)', color: 'white', padding: '2px 6px', borderRadius: '50%', fontSize: '10px', marginLeft: '4px' }}>{disputes.length}</span>}
-          </button>
-          <button onClick={() => setActiveTab('admin')} className={`btn ${activeTab === 'admin' ? 'btn-primary' : 'btn-secondary'}`}>
-            <Settings size={16} /> Admin panel
-          </button>
-        </nav>
+        {/* TABS & STAFF STATUS */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+          {staffUser && (
+            <div style={{ fontSize: '0.8rem', background: 'rgba(255,255,255,0.02)', padding: '6px 12px', borderRadius: '8px', border: '1px solid var(--border-muted)', color: 'white', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span>Staff: <b style={{ color: 'var(--primary)' }}>{staffUser.phone_or_handle}</b> <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>({staffUser.role.toUpperCase()})</span></span>
+              <button onClick={handleLogout} className="btn btn-secondary" style={{ padding: '3px 8px', fontSize: '0.7rem', height: 'auto', background: 'rgba(239, 68, 68, 0.1)', borderColor: 'rgba(239, 68, 68, 0.2)', color: '#EF4444' }}>Sign Out</button>
+            </div>
+          )}
+          <nav style={{ display: 'flex', gap: '8px' }}>
+            <button onClick={() => setActiveTab('verify')} className={`btn ${activeTab === 'verify' ? 'btn-primary' : 'btn-secondary'}`}>
+              <Search size={16} /> Seller lookup
+            </button>
+            <button onClick={() => setActiveTab('sandbox')} className={`btn ${activeTab === 'sandbox' ? 'btn-primary' : 'btn-secondary'}`}>
+              <Smartphone size={16} /> Chat Sandbox
+            </button>
+            <button onClick={() => setActiveTab('gallery')} className={`btn ${activeTab === 'gallery' ? 'btn-primary' : 'btn-secondary'}`}>
+              <Camera size={16} /> In-App Gallery
+            </button>
+            <button onClick={() => setActiveTab('moderator')} className={`btn ${activeTab === 'moderator' ? 'btn-primary' : 'btn-secondary'}`}>
+              <Gavel size={16} /> Disputes Queue {disputes.length > 0 && <span style={{ background: 'var(--accent-red)', color: 'white', padding: '2px 6px', borderRadius: '50%', fontSize: '10px', marginLeft: '4px' }}>{disputes.length}</span>}
+            </button>
+            <button onClick={() => setActiveTab('admin')} className={`btn ${activeTab === 'admin' ? 'btn-primary' : 'btn-secondary'}`}>
+              <Settings size={16} /> Admin panel
+            </button>
+          </nav>
+        </div>
       </header>
 
       {/* CORE VIEWPORT */}
@@ -2143,7 +2443,8 @@ export default function App() {
         )}
 
         {/* HUMAN MODERATOR DASHBOARD */}
-        {activeTab === 'moderator' && (
+        {activeTab === 'moderator' && !staffUser && renderLoginForm()}
+        {activeTab === 'moderator' && staffUser && (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '20px', minHeight: 'calc(100vh - 150px)' }}>
             
             {/* ESCALATIONS LIST */}
@@ -2152,6 +2453,47 @@ export default function App() {
                 <h3 style={{ fontSize: '1.1rem', margin: 0 }}>Escalation Queue</h3>
                 <div style={{ fontSize: '0.75rem', background: 'rgba(255,255,255,0.05)', padding: '4px 8px', borderRadius: '4px' }}>
                   AI Agreement: <b>{metrics.ai_agreement_rate_pct}%</b> ({metrics.total_disputes})
+                </div>
+              </div>
+
+              {/* General Case History Search & Filtering */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(0,0,0,0.1)', padding: '10px', borderRadius: '8px', border: '1px solid var(--border-muted)' }}>
+                <input 
+                  type="text" 
+                  value={disputeSearchQuery} 
+                  onChange={(e) => setDisputeSearchQuery(e.target.value)} 
+                  placeholder="Search item or user handle..." 
+                  className="form-input" 
+                  style={{ width: '100%', fontSize: '0.8rem', padding: '6px' }}
+                />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                  <select 
+                    value={disputeSearchStatus} 
+                    onChange={(e) => setDisputeSearchStatus(e.target.value)} 
+                    className="form-input" 
+                    style={{ fontSize: '0.75rem', padding: '4px', width: '100%', color: 'white', background: '#111827' }}
+                  >
+                    <option value="all">All Cases</option>
+                    <option value="active">Active</option>
+                    <option value="resolved">Resolved</option>
+                    <option value="appealed">Appealed Only</option>
+                  </select>
+                  <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                    <input 
+                      type="date" 
+                      value={disputeStartDate} 
+                      onChange={(e) => setDisputeStartDate(e.target.value)} 
+                      className="form-input" 
+                      style={{ fontSize: '0.7rem', padding: '4px', width: '50%', color: 'white', background: '#111827' }}
+                    />
+                    <input 
+                      type="date" 
+                      value={disputeEndDate} 
+                      onChange={(e) => setDisputeEndDate(e.target.value)} 
+                      className="form-input" 
+                      style={{ fontSize: '0.7rem', padding: '4px', width: '50%', color: 'white', background: '#111827' }}
+                    />
+                  </div>
                 </div>
               </div>
               
@@ -2188,9 +2530,10 @@ export default function App() {
                           </span>
                         </div>
                       </div>
-                      <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
-                        Filer: {disp.filed_by_handle} | Price: KES {disp.agreed_price}
-                      </p>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                        <span>Filer: {disp.filed_by_handle} | Price: KES {disp.agreed_price}</span>
+                        <span style={{ fontStyle: 'italic', color: 'var(--primary)' }}>{disp.time_in_queue}</span>
+                      </div>
                       <div style={{ fontSize: '0.75rem', background: 'rgba(0,0,0,0.1)', padding: '6px', borderRadius: '4px' }}>
                         Reason: {disp.reason.substring(0, 50)}...
                       </div>
@@ -2285,6 +2628,23 @@ export default function App() {
                     {/* RIGHT PANEL: AI Recommendation & Resolution */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                       
+                      {/* First-Instance Mediator Verdict */}
+                      {selectedDisputeDetails.disputes[0].first_instance_outcome && (
+                        <div style={{ background: 'rgba(139,92,246,0.06)', border: '1px solid var(--primary)', padding: '16px', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h4 style={{ fontSize: '0.85rem', color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '4px', margin: 0 }}>
+                              🛡️ First-Instance Mediator Verdict
+                            </h4>
+                            <span className={`status-badge status-${selectedDisputeDetails.disputes[0].first_instance_outcome}`} style={{ fontSize: '10px' }}>
+                              {selectedDisputeDetails.disputes[0].first_instance_outcome.toUpperCase()}
+                            </span>
+                          </div>
+                          <p style={{ fontSize: '0.75rem', lineHeight: '1.4', background: 'rgba(0,0,0,0.2)', padding: '8px', borderRadius: '4px', fontStyle: 'italic', margin: 0 }}>
+                            "{selectedDisputeDetails.disputes[0].first_instance_statement || 'No statement provided.'}"
+                          </p>
+                        </div>
+                      )}
+
                       {/* AI Tier 2 report */}
                       <div style={{ background: 'rgba(6,182,212,0.06)', border: '1px solid var(--secondary)', padding: '16px', borderRadius: '8px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
@@ -2364,36 +2724,14 @@ export default function App() {
                       {/* Decision Center Form */}
                       <form onSubmit={handleResolveDispute} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                         <div>
-                          <label style={{ fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>Assign Staff User (Resolver Role Check)</label>
-                          {(() => {
-                            const activeDispute = disputes.find(d => d.id === selectedDisputeId);
-                            const isAppeal = activeDispute?.is_appeal || false;
-                            const filteredStaff = (users.length > 0 ? users : [
-                              { id: "MOD_1", phone_or_handle: "MOD_1", role: "moderator" },
-                              { id: "ARB_1", phone_or_handle: "ARB_1", role: "arbitrator" },
-                              { id: "ADMIN_1", phone_or_handle: "ADMIN_1", role: "admin" }
-                            ]).filter(u => {
-                              if (isAppeal) {
-                                return u.role === 'arbitrator' || u.role === 'admin';
-                              } else {
-                                return u.role === 'moderator' || u.role === 'admin';
-                              }
-                            });
-
-                            return (
-                              <select 
-                                value={resolverId} 
-                                onChange={(e) => setResolverId(e.target.value)}
-                                className="form-input"
-                              >
-                                {filteredStaff.map(u => (
-                                  <option key={u.id} value={u.id}>
-                                    {u.phone_or_handle} ({u.role.toUpperCase()})
-                                  </option>
-                                ))}
-                              </select>
-                            );
-                          })()}
+                          <label style={{ fontSize: '0.75rem', display: 'block', marginBottom: '4px' }}>Resolver Staff Member</label>
+                          <input 
+                            type="text" 
+                            value={staffUser ? `${staffUser.phone_or_handle} (${staffUser.role.toUpperCase()})` : "MOD_1"} 
+                            disabled 
+                            className="form-input" 
+                            style={{ opacity: 0.8 }}
+                          />
                         </div>
 
                         <div>
@@ -2460,7 +2798,15 @@ export default function App() {
         )}
 
         {/* ADMIN PANEL */}
-        {activeTab === 'admin' && (
+        {activeTab === 'admin' && !staffUser && renderLoginForm()}
+        {activeTab === 'admin' && staffUser && staffUser.role !== 'admin' && (
+          <div className="glass-card" style={{ padding: '32px', textAlign: 'center', minHeight: '300px', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
+            <ShieldAlert size={48} style={{ color: 'var(--accent-red)', marginBottom: '16px' }} />
+            <h3 style={{ fontSize: '1.25rem', color: 'white' }}>Access Denied</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '4px' }}>You must log in with an Administrator account to view this panel.</p>
+          </div>
+        )}
+        {activeTab === 'admin' && staffUser && staffUser.role === 'admin' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             
             {/* Sandbox Debugging Tools */}
@@ -2478,6 +2824,109 @@ export default function App() {
               >
                 🚨 Purge Database & Reset Sessions
               </button>
+            </div>
+
+            {/* AI Agreement Trend Chart */}
+            {renderTrendChart()}
+
+            {/* Staff Performance Registry & Management */}
+            <div className="glass-card" style={{ padding: '20px' }}>
+              <h3 style={{ fontSize: '1.1rem', marginBottom: '16px' }}>Staff Performance & Registry</h3>
+              
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px' }}>
+                {/* List & Stats */}
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', textAlign: 'left' }}>
+                    <thead style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid var(--border-muted)' }}>
+                      <tr>
+                        <th style={{ padding: '10px' }}>Username</th>
+                        <th style={{ padding: '10px' }}>Role</th>
+                        <th style={{ padding: '10px' }}>Cases Resolved</th>
+                        <th style={{ padding: '10px' }}>Avg Time</th>
+                        <th style={{ padding: '10px' }}>Overturn Rate</th>
+                        <th style={{ padding: '10px' }}>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {staffLoading ? (
+                        <tr><td colSpan="6" style={{ padding: '12px', textAlign: 'center' }}>Loading staff...</td></tr>
+                      ) : staffMembers.length > 0 ? (
+                        staffMembers.map((sm, idx) => (
+                          <tr key={idx} style={{ borderBottom: '1px solid var(--border-muted)' }}>
+                            <td style={{ padding: '10px', fontWeight: 'bold' }}>{sm.phone_or_handle}</td>
+                            <td style={{ padding: '10px' }}>
+                              <span style={{ fontSize: '10px', background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: '4px', textTransform: 'uppercase' }}>{sm.role}</span>
+                            </td>
+                            <td style={{ padding: '10px' }}>{sm.case_count} cases</td>
+                            <td style={{ padding: '10px' }}>{sm.avg_resolution_time_hours}h</td>
+                            <td style={{ padding: '10px' }}>
+                              {sm.overturn_rate_pct !== null ? `${sm.overturn_rate_pct}%` : 'N/A'}
+                            </td>
+                            <td style={{ padding: '10px' }}>
+                              <button 
+                                onClick={() => handleRemoveStaff(sm.id)}
+                                disabled={sm.phone_or_handle === staffUser.phone_or_handle}
+                                className="btn btn-secondary"
+                                style={{ padding: '4px 8px', fontSize: '0.75rem', background: 'rgba(239,68,68,0.1)', color: '#EF4444', borderColor: 'rgba(239,68,68,0.2)', cursor: 'pointer' }}
+                              >
+                                Remove
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr><td colSpan="6" style={{ padding: '12px', textAlign: 'center' }}>No staff found.</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Add Staff Form */}
+                <div style={{ background: 'rgba(0,0,0,0.1)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-muted)' }}>
+                  <h4 style={{ fontSize: '0.9rem', marginBottom: '12px', color: 'white' }}>Register Staff Member</h4>
+                  {staffError && <p style={{ fontSize: '0.75rem', color: '#EF4444', marginBottom: '8px' }}>{staffError}</p>}
+                  <form onSubmit={handleAddStaff} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div>
+                      <label style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Username</label>
+                      <input 
+                        type="text" 
+                        value={newStaffUsername} 
+                        onChange={(e) => setNewStaffUsername(e.target.value)} 
+                        className="form-input" 
+                        placeholder="e.g. MOD_2" 
+                        required 
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Role</label>
+                      <select 
+                        value={newStaffRole} 
+                        onChange={(e) => setNewStaffRole(e.target.value)} 
+                        className="form-input"
+                        style={{ color: 'white', background: '#111827' }}
+                      >
+                        <option value="moderator">Mediator (First-Instance)</option>
+                        <option value="arbitrator">Arbitrator (Appeals)</option>
+                        <option value="admin">Administrator</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Password</label>
+                      <input 
+                        type="password" 
+                        value={newStaffPassword} 
+                        onChange={(e) => setNewStaffPassword(e.target.value)} 
+                        className="form-input" 
+                        placeholder="Password" 
+                        required 
+                      />
+                    </div>
+                    <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '8px', fontSize: '0.8rem', marginTop: '4px', cursor: 'pointer' }}>
+                      Register Member
+                    </button>
+                  </form>
+                </div>
+              </div>
             </div>
 
             {/* Config details & Editor */}
@@ -2532,6 +2981,42 @@ export default function App() {
                       style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-muted)', color: 'white', fontSize: '1rem', fontWeight: 'bold', width: '100%', padding: '8px' }}
                     />
                     <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px' }}>Hours allowed for the non-filing party to submit their statement.</p>
+                  </div>
+                  <div style={{ background: 'var(--bg-panel)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-muted)' }}>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>Escalation / Appeal Fee (KES)</label>
+                    <input 
+                      type="number" 
+                      min="0"
+                      value={systemSettings.ESCALATION_FEE_KES || 200} 
+                      onChange={(e) => setSystemSettings(prev => ({ ...prev, ESCALATION_FEE_KES: parseFloat(e.target.value) || 0 }))}
+                      className="form-input"
+                      style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-muted)', color: 'white', fontSize: '1rem', fontWeight: 'bold', width: '100%', padding: '8px' }}
+                    />
+                    <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px' }}>Refundable KES fee charged to appeal first-instance decisions.</p>
+                  </div>
+                  <div style={{ background: 'var(--bg-panel)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-muted)' }}>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>SLA Warning Threshold (Hours)</label>
+                    <input 
+                      type="number" 
+                      min="1"
+                      value={systemSettings.SLA_WARN_HOURS || 48} 
+                      onChange={(e) => setSystemSettings(prev => ({ ...prev, SLA_WARN_HOURS: parseInt(e.target.value) || 48 }))}
+                      className="form-input"
+                      style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-muted)', color: 'white', fontSize: '1rem', fontWeight: 'bold', width: '100%', padding: '8px' }}
+                    />
+                    <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px' }}>Hours before dispute queue card turns warning orange.</p>
+                  </div>
+                  <div style={{ background: 'var(--bg-panel)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-muted)' }}>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: '6px' }}>SLA Breach Deadline (Hours)</label>
+                    <input 
+                      type="number" 
+                      min="1"
+                      value={systemSettings.SLA_BREACH_HOURS || 72} 
+                      onChange={(e) => setSystemSettings(prev => ({ ...prev, SLA_BREACH_HOURS: parseInt(e.target.value) || 72 }))}
+                      className="form-input"
+                      style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-muted)', color: 'white', fontSize: '1rem', fontWeight: 'bold', width: '100%', padding: '8px' }}
+                    />
+                    <p style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px' }}>Hours before dispute queue card turns breach red.</p>
                   </div>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', alignItems: 'center' }}>
