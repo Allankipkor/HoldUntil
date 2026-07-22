@@ -17,6 +17,7 @@ class DarajaService:
             return "mock_oauth_access_token"
 
         url = f"https://{'sandbox' if settings.DARAJA_ENV == 'sandbox' else 'api'}.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
+        response = None
         try:
             auth_str = f"{settings.DARAJA_CONSUMER_KEY}:{settings.DARAJA_CONSUMER_SECRET}"
             encoded_auth = base64.b64encode(auth_str.encode()).decode()
@@ -25,8 +26,11 @@ class DarajaService:
             response.raise_for_status()
             return response.json()["access_token"]
         except Exception as e:
+            if response is not None:
+                logger.error(f"Failed to fetch Daraja Access Token. Status: {response.status_code}, Body: '{response.text}', Headers: {dict(response.headers)}")
+                raise Exception(f"Daraja auth failure (Status: {response.status_code}, Body: '{response.text}')") from e
             logger.error(f"Failed to fetch Daraja Access Token: {e}")
-            raise Exception("Daraja auth failure")
+            raise Exception("Daraja auth failure") from e
 
     @classmethod
     def initiate_stk_push(cls, db: Session, deal: Deal, phone_number: str) -> dict:
