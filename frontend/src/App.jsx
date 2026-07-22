@@ -578,7 +578,7 @@ export default function App() {
         evidences: [],
         chat_logs: []
       });
-      reply = `✅ Deal Draft Created!\n\nItem: HP Pavilion Laptop\nPrice: KES 15000.00\n\nPlease forward this invite to your buyer: "Hey! Click this link to accept the escrow deal: https://wa.me/bot_number?text=JOIN_${mockId}"`;
+      reply = `✅ Deal Draft Created!\n\nItem: HP Pavilion Laptop\nPrice: KES 15000.00\n\nPlease forward this invite to your buyer: "Hey! Click this link to accept the escrow deal: https://wa.me/254107560742?text=JOIN_${mockId}"`;
     } else if (cleanMsg.startsWith("JOIN_")) {
       const dealId = msg.split("_")[1] || "deal_draft";
       setActiveDealId(dealId);

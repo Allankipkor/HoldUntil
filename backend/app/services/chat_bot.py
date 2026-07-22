@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from backend.app.models import User, UserRole, Deal, DealStatus, ChatLog, PlatformType, Dispute, DisputeTier, OutcomeType, ResolutionMethod
 from backend.app.services.meta_service import MetaService
 from backend.app.services.daraja_service import DarajaService
+from backend.app.config import settings
 import logging
 
 logger = logging.getLogger("chat_bot")
@@ -432,7 +433,6 @@ class ChatBotService:
             if not latest_deal:
                 return "No recent transaction found."
             
-            from backend.app.config import settings
             dispute = db.query(Dispute).filter(Dispute.deal_id == latest_deal.id).first()
             if not dispute:
                 return "No dispute record found for this transaction."
@@ -648,7 +648,7 @@ class ChatBotService:
             session["state"] = "AWAITING_BUYER_LINK"
             
             invite_text = f"JOIN_{deal.id}"
-            invite_link = f"https://wa.me/bot_number?text={invite_text}"
+            invite_link = f"https://wa.me/{settings.BOT_WHATSAPP_NUMBER}?text={invite_text}"
             
             # Return invite instructions to the seller
             response = (
@@ -945,7 +945,6 @@ class ChatBotService:
                     # Transition non-filer to response state
                     non_filer_user = deal.seller if user.id == deal.buyer_id else deal.buyer
                     
-                    from backend.app.config import settings
                     now = datetime.now(UTC).replace(tzinfo=None)
                     
                     if settings.SIMULATION_MODE:

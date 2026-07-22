@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     META_VERIFY_TOKEN: str = "holduntil_verify_token_123"
     META_ACCESS_TOKEN: str = "mock_meta_access_token"
     META_PHONE_NUMBER_ID: str = "mock_phone_number_id"
+    BOT_WHATSAPP_NUMBER: str = "254107560742"
 
     # Safaricom Daraja (M-Pesa) Settings
     DARAJA_ENV: str = "sandbox"  # sandbox or production
