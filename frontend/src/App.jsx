@@ -2666,6 +2666,42 @@ export default function App() {
                         </p>
                       </div>
 
+                      {selectedDisputeDetails.payments && selectedDisputeDetails.payments.find(p => p.amount === 200 && p.status === 'pending') && (
+                        <div style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid #F59E0B', padding: '12px', borderRadius: '8px', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <div style={{ fontWeight: 'bold', color: '#F59E0B' }}>Pending Appeal Fee Payment (C2B)</div>
+                          <div>Checkout ID: <code style={{ fontSize: '9px', background: 'rgba(0,0,0,0.3)', padding: '2px 4px', borderRadius: '3px' }}>{selectedDisputeDetails.payments.find(p => p.amount === 200 && p.status === 'pending').stk_push_ref}</code></div>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const pendingP = selectedDisputeDetails.payments.find(p => p.amount === 200 && p.status === 'pending');
+                              if (!pendingP) return;
+                              const fd = new FormData();
+                              fd.append("checkout_id", pendingP.stk_push_ref);
+                              const res = await fetch('/api/dashboard/simulation/mock-mpesa-payment', {
+                                method: 'POST',
+                                body: fd
+                              });
+                              if (res.ok) {
+                                alert("Appeal fee payment simulated successfully!");
+                                // Refresh disputes & select
+                                const discRes = await fetch('/api/dashboard/disputes');
+                                if (discRes.ok) {
+                                  const data = await discRes.json();
+                                  setDisputes(data);
+                                  selectDispute(selectedDisputeId);
+                                }
+                              } else {
+                                alert("Simulation failed.");
+                              }
+                            }}
+                            className="btn btn-primary"
+                            style={{ padding: '6px 10px', fontSize: '10px', background: '#F59E0B', borderColor: '#F59E0B', color: 'black', cursor: 'pointer', alignSelf: 'flex-start', fontWeight: 'bold' }}
+                          >
+                            Simulate M-Pesa Appeal Payment Callback (Success)
+                          </button>
+                        </div>
+                      )}
+
                       {selectedDisputeDetails.disputes[0].appeal_fee_payout_ref && (
                         <div style={{ background: 'rgba(139,92,246,0.06)', border: '1px solid var(--primary)', padding: '12px', borderRadius: '8px', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                           <div style={{ fontWeight: 'bold' }}>Appeal Refund Status</div>
