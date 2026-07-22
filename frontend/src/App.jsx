@@ -6,7 +6,16 @@ import {
   Truck, HelpCircle, ShieldAlert, Award, Camera
 } from 'lucide-react';
 
-const BACKEND_URL = ''; // Proxied via Vite
+const API_BASE = import.meta.env.VITE_API_URL || "";
+if (API_BASE) {
+  const originalFetch = window.fetch;
+  window.fetch = async (url, options) => {
+    if (typeof url === "string" && url.startsWith("/api")) {
+      url = `${API_BASE}${url}`;
+    }
+    return originalFetch(url, options);
+  };
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('sandbox');
