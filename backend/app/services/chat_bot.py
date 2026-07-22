@@ -457,6 +457,28 @@ class ChatBotService:
             session["state"] = "IDLE"
             return "No active funded deal found to cancel."
 
+        # Sandbox Developer Mock Payment Command
+        if normalized_text.startswith("MOCK_PAY"):
+            latest_deal = db.query(Deal).filter(
+                (Deal.seller_id == user.id) | (Deal.buyer_id == user.id)
+            ).order_by(Deal.created_at.desc()).first()
+            if not latest_deal:
+                return "No recent deal found to simulate payment."
+            
+            payment = db.query(Payment).filter(
+                Payment.deal_id == latest_deal.id,
+                Payment.status == PaymentStatus.PENDING
+            ).first()
+            if not payment:
+                return f"No pending payment found for deal '{latest_deal.item_description}'."
+            
+            from backend.app.routes.dashboard import simulate_mpesa_payment
+            try:
+                simulate_mpesa_payment(checkout_id=payment.stk_push_ref, db=db)
+                return f"✅ Payment callback simulated successfully for checkout ID: {payment.stk_push_ref}"
+            except Exception as ex:
+                return f"❌ Simulation failed: {str(ex)}"
+
         # Appeal Command
         if normalized_text == "APPEAL":
             latest_deal = db.query(Deal).filter(
