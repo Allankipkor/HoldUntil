@@ -33,19 +33,19 @@ class DarajaService:
             raise Exception("Daraja auth failure") from e
 
     @classmethod
-    def initiate_stk_push(cls, db: Session, deal: Deal, phone_number: str) -> dict:
+    def initiate_stk_push(cls, db: Session, deal: Deal, phone_number: str, amount: float = None) -> dict:
         """
         Trigger an STK Push to the buyer's phone number.
         In simulation mode, we immediately return a success response and mock payment creation.
         """
-        amount = int(deal.agreed_price)
+        final_amount = int(amount) if amount is not None else int(deal.agreed_price)
         # Format phone to 2547XXXXXXXX
         formatted_phone = phone_number.replace("+", "").strip()
         if formatted_phone.startswith("0"):
             formatted_phone = "254" + formatted_phone[1:]
         elif not formatted_phone.startswith("254"):
             formatted_phone = "254" + formatted_phone
-
+ 
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         
         if settings.SIMULATION_MODE:
@@ -53,7 +53,7 @@ class DarajaService:
             payment = Payment(
                 deal_id=deal.id,
                 stk_push_ref=mock_checkout_id,
-                amount=deal.agreed_price,
+                amount=final_amount,
                 status=PaymentStatus.PENDING
             )
             db.add(payment)
@@ -68,11 +68,11 @@ class DarajaService:
                 "CustomerMessage": "Success. Request accepted for processing",
                 "simulation": True
             }
-
+ 
         access_token = cls._get_access_token()
         password_str = f"{settings.DARAJA_SHORTCODE}{settings.DARAJA_PASSKEY}{timestamp}"
         password = base64.b64encode(password_str.encode()).decode()
-
+ 
         url = f"https://{'sandbox' if settings.DARAJA_ENV == 'sandbox' else 'api'}.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
         headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
         
@@ -81,7 +81,7 @@ class DarajaService:
             "Password": password,
             "Timestamp": timestamp,
             "TransactionType": "CustomerPayBillOnline",
-            "Amount": amount,
+            "Amount": final_amount,
             "PartyA": formatted_phone,
             "PartyB": settings.DARAJA_SHORTCODE,
             "PhoneNumber": formatted_phone,
@@ -89,7 +89,7 @@ class DarajaService:
             "AccountReference": f"Deal-{deal.id[:8]}",
             "TransactionDesc": f"HoldUntil Escrow Deal {deal.id[:8]}"
         }
-
+ 
         try:
             response = requests.post(url, json=payload, headers=headers, timeout=15)
             response_json = response.json()
@@ -98,7 +98,7 @@ class DarajaService:
                 payment = Payment(
                     deal_id=deal.id,
                     stk_push_ref=checkout_req_id,
-                    amount=deal.agreed_price,
+                    amount=final_amount,
                     status=PaymentStatus.PENDING
                 )
                 db.add(payment)

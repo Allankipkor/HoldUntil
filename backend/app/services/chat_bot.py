@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, UTC
 import uuid
 import re
 from sqlalchemy.orm import Session
-from backend.app.models import User, UserRole, Deal, DealStatus, ChatLog, PlatformType, Dispute, DisputeTier, OutcomeType, ResolutionMethod
+from backend.app.models import User, UserRole, Deal, DealStatus, ChatLog, PlatformType, Dispute, DisputeTier, OutcomeType, ResolutionMethod, Payment, PaymentStatus
 from backend.app.services.meta_service import MetaService
 from backend.app.services.daraja_service import DarajaService
 from backend.app.config import settings
@@ -498,34 +498,18 @@ class ChatBotService:
             if not is_eligible:
                 return f"Only the party who lost the dispute ({lost_party_label}) is eligible to appeal this decision."
 
-            # Mark for Senior Arbitrator review
-            dispute.is_appeal = True
-            dispute.appeal_requested_by = user.id
-            dispute.resolved_at = None  # Re-open for human review!
-            dispute.tier = DisputeTier.TIER_3_HUMAN
+            # Save state to await payment confirmation
+            session["state"] = "AWAITING_APPEAL_FEE_CONFIRM"
+            session["deal_id"] = latest_deal.id
             db.commit()
             
-            cls.auto_assign_arbitrator(db, dispute)
-            
-            # Notify both parties using templates
-            appeal_notify_components = [{
-                "type": "body",
-                "parameters": [
-                    {"type": "text", "text": latest_deal.item_description[:30]},
-                    {"type": "text", "text": "Dispute Appealed"},
-                    {"type": "text", "text": f"The dispute has been appealed by {user.phone_or_handle}."},
-                    {"type": "text", "text": "It will be reviewed by a Senior Arbitrator. Escrow funds remain locked."}
-                ]
-            }]
-            MetaService.send_template_message(db, platform, latest_deal.buyer.phone_or_handle, "deal_status_alert", components=appeal_notify_components, deal_id=latest_deal.id)
-            MetaService.send_template_message(db, platform, latest_deal.seller.phone_or_handle, "deal_status_alert", components=appeal_notify_components, deal_id=latest_deal.id)
-            
-            session["state"] = "IDLE"
-            session["deal_id"] = None
+            payout_phone = user.payout_mpesa_number or user.phone_or_handle
             return (
-                f"Dispute appealed successfully. A Senior Arbitrator will audit the case for final review. "
-                f"Appeal fee of KES {settings.ESCALATION_FEE_KES:.2f} has been charged. "
-                f"This decision will be final within HoldUntil's internal dispute process."
+                "⚠️ **Dispute Appeal Request**\n\n"
+                f"To appeal this decision, a fee of KES {settings.ESCALATION_FEE_KES:.2f} applies. "
+                "If your appeal is successful and the decision is overturned, this fee will be fully refunded to you.\n\n"
+                f"We will send an M-Pesa STK Push of KES {settings.ESCALATION_FEE_KES:.2f} to your registered payout number: {payout_phone}.\n\n"
+                "Reply **CONFIRM** to proceed and trigger the payment prompt, or **CANCEL** to abort."
             )
 
         # Voluntary release/refund commands during disputes
@@ -1068,6 +1052,46 @@ class ChatBotService:
                     )
                     
                     return f"Your dispute has been recorded. We have notified the other party and given them {window_hours} hours to respond with their statement and evidence."
+
+                elif session["state"] == "AWAITING_APPEAL_FEE_CONFIRM":
+                    deal = db.query(Deal).filter(Deal.id == session["deal_id"]).first()
+                    if not deal:
+                        session["state"] = "IDLE"
+                        return "Error: No active deal found."
+                        
+                    if normalized_text == "CONFIRM":
+                        payout_phone = user.payout_mpesa_number or user.phone_or_handle
+                        try:
+                            # Trigger STK Push (automatically creates the pending Payment in DarajaService)
+                            res = DarajaService.initiate_stk_push(
+                                db=db,
+                                deal=deal,
+                                phone_number=payout_phone,
+                                amount=settings.ESCALATION_FEE_KES
+                            )
+                            checkout_id = res.get("CheckoutRequestID") if isinstance(res, dict) else res
+                            if not checkout_id:
+                                raise Exception("No CheckoutRequestID returned from Daraja API")
+                            
+                            # Update the dispute record with the appeal requested by
+                            dispute = db.query(Dispute).filter(Dispute.deal_id == deal.id).order_by(Dispute.created_at.desc()).first()
+                            if dispute:
+                                dispute.appeal_requested_by = user.id
+                                
+                            db.commit()
+                            
+                            session["state"] = "AWAITING_APPEAL_FEE_CALLBACK"
+                            return f"We have sent an M-Pesa STK Push of KES {settings.ESCALATION_FEE_KES:.2f} to {payout_phone}. Please check your phone and enter your PIN to authorize the appeal fee."
+                        except Exception as e:
+                            logger.error(f"Failed to initiate appeal STK push: {e}")
+                            return f"Failed to trigger M-Pesa payment prompt: {str(e)}. Please check that your registered payout number is valid."
+                    elif normalized_text == "CANCEL":
+                        session["state"] = "IDLE"
+                        session["deal_id"] = None
+                        db.commit()
+                        return "Appeal process aborted. You are now back in IDLE."
+                    else:
+                        return "Invalid choice. Please reply with CONFIRM to trigger the payment and proceed with the appeal, or CANCEL to abort."
 
         return f"HoldUntil Escrow Bot. Type 'SELL' to start a new transaction, or 'HELP' for instructions."
 

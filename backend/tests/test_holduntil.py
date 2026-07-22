@@ -185,7 +185,7 @@ def test_price_edit_and_cancel_commands(db_session):
 
 def test_dispute_resolution_and_trust_adjustment(db_session):
     """Test full dispute flow: AI moderation (recommender only), first-instance resolution, appeal request, and arbitrator resolution."""
-    from backend.app.models import Dispute, DisputeTier, OutcomeType, User, UserRole
+    from backend.app.models import Dispute, DisputeTier, OutcomeType, User, UserRole, Payment, PaymentStatus
     
     # 1. Setup users and a funded deal
     seller_phone = "254711111111"
@@ -282,7 +282,22 @@ def test_dispute_resolution_and_trust_adjustment(db_session):
 
     # 5. Buyer files an APPEAL
     reply_appeal = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, buyer_phone, "APPEAL")
-    assert "appealed successfully" in reply_appeal.lower()
+    assert "dispute appeal request" in reply_appeal.lower()
+    
+    # Confirm the appeal fee payment trigger
+    reply_confirm = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, buyer_phone, "CONFIRM")
+    assert "sent an m-pesa stk push" in reply_confirm.lower()
+    
+    # Simulate payment callback
+    from backend.app.config import settings
+    from backend.app.routes.dashboard import simulate_mpesa_payment
+    payment = db_session.query(Payment).filter(
+        Payment.deal_id == deal.id,
+        Payment.status == PaymentStatus.PENDING,
+        Payment.amount == settings.ESCALATION_FEE_KES
+    ).first()
+    assert payment is not None
+    simulate_mpesa_payment(checkout_id=payment.stk_push_ref, db=db_session)
     
     db_session.refresh(dispute)
     db_session.refresh(deal)
@@ -808,7 +823,26 @@ def test_non_filer_appeals_if_lost(db_session):
     
     # 1. Non-filer (Seller) appeals -> should be allowed since they lost the case!
     reply = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, "254700000002", "APPEAL")
-    assert "Dispute appealed successfully" in reply
+    assert "Dispute Appeal Request" in reply
+    
+    # Confirm
+    reply_confirm = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, "254700000002", "CONFIRM")
+    assert "sent an M-Pesa STK Push" in reply_confirm
+    
+    # Simulate payment
+    from backend.app.config import settings
+    from backend.app.models import Payment, PaymentStatus
+    from backend.app.routes.dashboard import simulate_mpesa_payment
+    payment = db_session.query(Payment).filter(
+        Payment.deal_id == deal.id,
+        Payment.status == PaymentStatus.PENDING,
+        Payment.amount == settings.ESCALATION_FEE_KES
+    ).first()
+    assert payment is not None
+    simulate_mpesa_payment(checkout_id=payment.stk_push_ref, db=db_session)
+    
+    db_session.refresh(dispute)
+    assert dispute.is_appeal is True
     
     # Reset is_appeal to test other branches
     dispute.is_appeal = False
@@ -845,7 +879,26 @@ def test_filer_appeals_if_lost(db_session):
     
     # Filer (Buyer) lost -> they should be allowed to appeal!
     reply = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, "254700000003", "APPEAL")
-    assert "Dispute appealed successfully" in reply
+    assert "Dispute Appeal Request" in reply
+    
+    # Confirm
+    reply_confirm = ChatBotService.process_message(db_session, PlatformType.WHATSAPP, "254700000003", "CONFIRM")
+    assert "sent an M-Pesa STK Push" in reply_confirm
+    
+    # Simulate payment
+    from backend.app.config import settings
+    from backend.app.models import Payment, PaymentStatus
+    from backend.app.routes.dashboard import simulate_mpesa_payment
+    payment = db_session.query(Payment).filter(
+        Payment.deal_id == deal.id,
+        Payment.status == PaymentStatus.PENDING,
+        Payment.amount == settings.ESCALATION_FEE_KES
+    ).first()
+    assert payment is not None
+    simulate_mpesa_payment(checkout_id=payment.stk_push_ref, db=db_session)
+    
+    db_session.refresh(dispute)
+    assert dispute.is_appeal is True
 
 def test_response_window_flow_evidence_before_review(db_session):
     """Verify response window flow: dispute filing notifies non-filer, non-filer submits evidence and response, triggering AI/mediator assignment."""

@@ -673,35 +673,81 @@ def simulate_mpesa_payment(checkout_id: str = Form(...), db: Session = Depends(g
 
     # Route request locally
     import requests
-    # Rather than making a network request, we can directly update it using our callback code
-    # Or call webhook endpoint logic
-    from backend.app.routes.daraja_webhook import mpesa_stk_callback
-    # For safety, let's just trigger the database updates directly:
+    from backend.app.config import settings
     receipt_no = f"MPESA_{uuid.uuid4().hex[:8].upper()}"
+    
+    is_appeal_payment = (deal.status == DealStatus.DISPUTED and payment.amount == settings.ESCALATION_FEE_KES and payment.status == PaymentStatus.PENDING)
+    
+    if is_appeal_payment:
+        payment.status = PaymentStatus.PAID
+        payment.c2b_confirmation_ref = receipt_no
+        db.commit()
+        
+        dispute = db.query(Dispute).filter(Dispute.deal_id == deal.id, Dispute.resolved_at != None).order_by(Dispute.resolved_at.desc()).first()
+        if dispute:
+            dispute.is_appeal = True
+            dispute.resolved_at = None
+            dispute.tier = DisputeTier.TIER_3_HUMAN
+            dispute.appeal_fee_payout_ref = checkout_id
+            db.commit()
+            
+            from backend.app.services.chat_bot import ChatBotService
+            ChatBotService.auto_assign_arbitrator(db, dispute)
+            
+            # Reset filer session state
+            filer = db.query(User).filter(User.id == dispute.appeal_requested_by).first()
+            if filer:
+                from backend.app.services.chat_bot import USER_SESSIONS
+                USER_SESSIONS[filer.phone_or_handle] = {"state": "IDLE", "deal_id": None}
+                
+            # Notify using templates
+            notify_components = [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": deal.item_description[:30]},
+                    {"type": "text", "text": "Dispute Appealed"},
+                    {"type": "text", "text": "The dispute appeal fee payment was received."},
+                    {"type": "text", "text": "A Senior Arbitrator will audit the case for final review. Escrow funds remain locked."}
+                ]
+            }]
+            MetaService.send_template_message(db, PlatformType.WHATSAPP, deal.buyer.phone_or_handle, "deal_status_alert", components=notify_components, deal_id=deal.id)
+            MetaService.send_template_message(db, PlatformType.WHATSAPP, deal.seller.phone_or_handle, "deal_status_alert", components=notify_components, deal_id=deal.id)
+        return {"status": "payment_simulated", "receipt": receipt_no, "deal_status": deal.status}
+        
     payment.status = PaymentStatus.PAID
     payment.c2b_confirmation_ref = receipt_no
     deal.status = DealStatus.FUNDED
     deal.verification_code = f"HU-{uuid.uuid4().hex[:4].upper()}"
     db.commit()
 
-    # Trigger dialogue notification bots
-    MetaService.send_text_message(
+    # Notify Buyer using template
+    buyer_components = [{
+        "type": "body",
+        "parameters": [
+            {"type": "text", "text": deal.item_description[:30]},
+            {"type": "text", "text": "Payment Received"},
+            {"type": "text", "text": f"M-Pesa Payment of KES {deal.agreed_price:.2f} received successfully! Receipt: {receipt_no}."},
+            {"type": "text", "text": "The funds are safely locked in HoldUntil escrow. The seller has been notified to ship the item."}
+        ]
+    }]
+    MetaService.send_template_message(
         db, PlatformType.WHATSAPP, deal.buyer.phone_or_handle,
-        f"💰 M-Pesa Payment of KES {deal.agreed_price:.2f} received successfully! Receipt: {receipt_no}.\n\n"
-        f"The funds are safely locked in HoldUntil escrow. The seller has been notified to ship the item.",
-        deal.id
+        "deal_status_alert", components=buyer_components, deal_id=deal.id
     )
 
-    MetaService.send_text_message(
+    # Notify Seller using template
+    seller_components = [{
+        "type": "body",
+        "parameters": [
+            {"type": "text", "text": deal.item_description[:30]},
+            {"type": "text", "text": "Payment Confirmed"},
+            {"type": "text", "text": f"Buyer has paid KES {deal.agreed_price:.2f} into secure escrow."},
+            {"type": "text", "text": f"Please ship the item. Your package code is: {deal.verification_code}. Write it on the package, take a photo, and upload here as proof. Or reply: 'SHIPPED <courier_tracking_number>'."}
+        ]
+    }]
+    MetaService.send_template_message(
         db, PlatformType.WHATSAPP, deal.seller.phone_or_handle,
-        f"🎉 Payment Confirmed!\n\n"
-        f"Buyer has paid KES {deal.agreed_price:.2f} into secure escrow.\n"
-        f"Please ship the item as agreed.\n\n"
-        f"Your unique delivery code is: **{deal.verification_code}**\n"
-        f"When delivering, write this code on the package and take a photo. "
-        f"Upload the photo here as proof of delivery.\n\n"
-        f"Or reply: 'SHIPPED <courier_tracking_number>'",
-        deal.id
+        "deal_status_alert", components=seller_components, deal_id=deal.id
     )
 
     return {"status": "payment_simulated", "receipt": receipt_no, "deal_status": deal.status}

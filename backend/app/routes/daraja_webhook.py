@@ -2,8 +2,9 @@ import uuid
 from fastapi import APIRouter, Request, Depends, HTTPException
 from sqlalchemy.orm import Session
 from backend.app.database import get_db
-from backend.app.models import Payment, PaymentStatus, Deal, DealStatus, PlatformType, Dispute
+from backend.app.models import Payment, PaymentStatus, Deal, DealStatus, PlatformType, Dispute, DisputeTier, User
 from backend.app.services.meta_service import MetaService
+from backend.app.config import settings
 import logging
 
 logger = logging.getLogger("daraja_webhook")
@@ -32,6 +33,8 @@ async def mpesa_stk_callback(request: Request, db: Session = Depends(get_db)):
             logger.warning(f"Deal linked to payment {payment.id} not found.")
             return {"status": "ignored"}
 
+        is_appeal_payment = (deal.status == DealStatus.DISPUTED and payment.amount == settings.ESCALATION_FEE_KES and payment.status == PaymentStatus.PENDING)
+
         if result_code == 0:
             # Success!
             metadata_list = stk_callback.get("CallbackMetadata", {}).get("Item", [])
@@ -43,62 +46,114 @@ async def mpesa_stk_callback(request: Request, db: Session = Depends(get_db)):
 
             payment.status = PaymentStatus.PAID
             payment.c2b_confirmation_ref = receipt_no or f"M_REC_{uuid.uuid4().hex[:8].upper()}"
-            deal.status = DealStatus.FUNDED
-            
-            # Generate the dynamic package verification code
-            deal.verification_code = f"HU-{uuid.uuid4().hex[:4].upper()}"
             db.commit()
 
-            # Notify Buyer using template
-            buyer_components = [{
-                "type": "body",
-                "parameters": [
-                    {"type": "text", "text": deal.item_description[:30]},
-                    {"type": "text", "text": "Payment Received"},
-                    {"type": "text", "text": f"M-Pesa Payment of KES {deal.agreed_price:.2f} received successfully! Receipt: {payment.c2b_confirmation_ref or 'Confirming'}."},
-                    {"type": "text", "text": "The funds are safely locked in HoldUntil escrow. The seller has been notified to ship the item."}
-                ]
-            }]
-            MetaService.send_template_message(
-                db, PlatformType.WHATSAPP, deal.buyer.phone_or_handle,
-                "deal_status_alert", components=buyer_components, deal_id=deal.id
-            )
+            if is_appeal_payment:
+                # Load the latest resolved dispute
+                dispute = db.query(Dispute).filter(Dispute.deal_id == deal.id, Dispute.resolved_at != None).order_by(Dispute.resolved_at.desc()).first()
+                if dispute:
+                    dispute.is_appeal = True
+                    dispute.resolved_at = None
+                    dispute.tier = DisputeTier.TIER_3_HUMAN
+                    dispute.appeal_fee_payout_ref = checkout_id
+                    db.commit()
+                    
+                    # Auto-assign arbitrator
+                    from backend.app.services.chat_bot import ChatBotService
+                    ChatBotService.auto_assign_arbitrator(db, dispute)
+                    
+                    # Reset filer session state
+                    filer = db.query(User).filter(User.id == dispute.appeal_requested_by).first()
+                    if filer:
+                        from backend.app.services.chat_bot import USER_SESSIONS
+                        USER_SESSIONS[filer.phone_or_handle] = {"state": "IDLE", "deal_id": None}
+                    
+                    # Notify both parties using template
+                    notify_components = [{
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": deal.item_description[:30]},
+                            {"type": "text", "text": "Dispute Appealed"},
+                            {"type": "text", "text": "The dispute appeal fee payment was received."},
+                            {"type": "text", "text": "A Senior Arbitrator will audit the case for final review. Escrow funds remain locked."}
+                        ]
+                    }]
+                    MetaService.send_template_message(db, PlatformType.WHATSAPP, deal.buyer.phone_or_handle, "deal_status_alert", components=notify_components, deal_id=deal.id)
+                    MetaService.send_template_message(db, PlatformType.WHATSAPP, deal.seller.phone_or_handle, "deal_status_alert", components=notify_components, deal_id=deal.id)
+                logger.info(f"Processed successful B2C Appeal Fee callback for Deal {deal.id}")
+            else:
+                deal.status = DealStatus.FUNDED
+                
+                # Generate the dynamic package verification code
+                deal.verification_code = f"HU-{uuid.uuid4().hex[:4].upper()}"
+                db.commit()
 
-            # Notify Seller using template
-            seller_components = [{
-                "type": "body",
-                "parameters": [
-                    {"type": "text", "text": deal.item_description[:30]},
-                    {"type": "text", "text": "Payment Confirmed"},
-                    {"type": "text", "text": f"Buyer has paid KES {deal.agreed_price:.2f} into secure escrow."},
-                    {"type": "text", "text": f"Please ship the item. Your package code is: {deal.verification_code}. Write it on the package, take a photo, and upload here as proof. Or reply: 'SHIPPED <courier_tracking_number>'."}
-                ]
-            }]
-            MetaService.send_template_message(
-                db, PlatformType.WHATSAPP, deal.seller.phone_or_handle,
-                "deal_status_alert", components=seller_components, deal_id=deal.id
-            )
-            logger.info(f"Payment success processed for Deal {deal.id}. Escrow funded.")
+                # Notify Buyer using template
+                buyer_components = [{
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": deal.item_description[:30]},
+                        {"type": "text", "text": "Payment Received"},
+                        {"type": "text", "text": f"M-Pesa Payment of KES {deal.agreed_price:.2f} received successfully! Receipt: {payment.c2b_confirmation_ref or 'Confirming'}."},
+                        {"type": "text", "text": "The funds are safely locked in HoldUntil escrow. The seller has been notified to ship the item."}
+                    ]
+                }]
+                MetaService.send_template_message(
+                    db, PlatformType.WHATSAPP, deal.buyer.phone_or_handle,
+                    "deal_status_alert", components=buyer_components, deal_id=deal.id
+                )
+
+                # Notify Seller using template
+                seller_components = [{
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": deal.item_description[:30]},
+                        {"type": "text", "text": "Payment Confirmed"},
+                        {"type": "text", "text": f"Buyer has paid KES {deal.agreed_price:.2f} into secure escrow."},
+                        {"type": "text", "text": f"Please ship the item. Your package code is: {deal.verification_code}. Write it on the package, take a photo, and upload here as proof. Or reply: 'SHIPPED <courier_tracking_number>'."}
+                    ]
+                }]
+                MetaService.send_template_message(
+                    db, PlatformType.WHATSAPP, deal.seller.phone_or_handle,
+                    "deal_status_alert", components=seller_components, deal_id=deal.id
+                )
+                logger.info(f"Payment success processed for Deal {deal.id}. Escrow funded.")
         else:
             # Cancelled or failed
             payment.status = PaymentStatus.FAILED
-            deal.status = DealStatus.AWAITING_CONFIRMATION  # reset so they can retry
             db.commit()
 
-            buyer_failed_components = [{
-                "type": "body",
-                "parameters": [
-                    {"type": "text", "text": deal.item_description[:30]},
-                    {"type": "text", "text": "Payment Failed"},
-                    {"type": "text", "text": f"M-Pesa Payment failed or was cancelled: {result_desc}."},
-                    {"type": "text", "text": "Reply 'CONFIRM' to try again."}
-                ]
-            }]
-            MetaService.send_template_message(
-                db, PlatformType.WHATSAPP, deal.buyer.phone_or_handle,
-                "deal_status_alert", components=buyer_failed_components, deal_id=deal.id
-            )
-            logger.info(f"Payment failed processed for Deal {deal.id}: {result_desc}")
+            if is_appeal_payment:
+                dispute = db.query(Dispute).filter(Dispute.deal_id == deal.id).order_by(Dispute.created_at.desc()).first()
+                if dispute:
+                    filer = db.query(User).filter(User.id == dispute.appeal_requested_by).first()
+                    if filer:
+                        from backend.app.services.chat_bot import USER_SESSIONS
+                        USER_SESSIONS[filer.phone_or_handle] = {"state": "IDLE", "deal_id": None}
+                        MetaService.send_text_message(
+                            db, PlatformType.WHATSAPP, filer.phone_or_handle,
+                            f"❌ M-Pesa Payment for the dispute appeal fee failed or was cancelled: {result_desc}. Your appeal has not been submitted.",
+                            deal.id
+                        )
+                logger.info(f"Appeal fee payment failed processed for Deal {deal.id}: {result_desc}")
+            else:
+                deal.status = DealStatus.AWAITING_CONFIRMATION  # reset so they can retry
+                db.commit()
+
+                buyer_failed_components = [{
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": deal.item_description[:30]},
+                        {"type": "text", "text": "Payment Failed"},
+                        {"type": "text", "text": f"M-Pesa Payment failed or was cancelled: {result_desc}."},
+                        {"type": "text", "text": "Reply 'CONFIRM' to try again."}
+                    ]
+                }]
+                MetaService.send_template_message(
+                    db, PlatformType.WHATSAPP, deal.buyer.phone_or_handle,
+                    "deal_status_alert", components=buyer_failed_components, deal_id=deal.id
+                )
+                logger.info(f"Payment failed processed for Deal {deal.id}: {result_desc}")
 
         return {"ResultCode": 0, "ResultDesc": "Success"}
     except Exception as err:
