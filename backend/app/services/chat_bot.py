@@ -711,7 +711,7 @@ class ChatBotService:
                 session["state"] = "AWAITING_COURIER_CONFIG_BY_SELLER"
                 return "You selected Shipped Goods (Courier). Waiting for the seller to specify the courier service being used..."
             else:
-                return cls._trigger_disclaimer_acknowledgements(db, platform, deal)
+                return cls._trigger_disclaimer_acknowledgements(db, platform, deal, phone_or_handle)
 
         elif state == "AWAITING_COURIER_SELECTION":
             val = normalized_text.strip()
@@ -729,7 +729,7 @@ class ChatBotService:
             if val in couriers:
                 deal.courier_name = couriers[val]
                 db.commit()
-                return cls._trigger_disclaimer_acknowledgements(db, platform, deal)
+                return cls._trigger_disclaimer_acknowledgements(db, platform, deal, phone_or_handle)
             elif val == "5" or "other" in val.lower():
                 session["state"] = "AWAITING_MANUAL_COURIER"
                 return "Please enter the name of the courier service manually:"
@@ -750,7 +750,7 @@ class ChatBotService:
                 return "Error: No active deal found."
             deal.courier_name = text.strip()
             db.commit()
-            return cls._trigger_disclaimer_acknowledgements(db, platform, deal)
+            return cls._trigger_disclaimer_acknowledgements(db, platform, deal, phone_or_handle)
 
         elif state == "AWAITING_DISCLAIMER_ACK":
             deal = db.query(Deal).filter(Deal.id == session["deal_id"]).first()
@@ -1145,7 +1145,7 @@ class ChatBotService:
         )
 
     @classmethod
-    def _trigger_disclaimer_acknowledgements(cls, db: Session, platform: PlatformType, deal: Deal) -> str:
+    def _trigger_disclaimer_acknowledgements(cls, db: Session, platform: PlatformType, deal: Deal, active_phone: str) -> str:
         disclaimer = (
             "⚠️ IMPORTANT TRANSACTION DISCLAIMER ⚠️\n\n"
             "Evidence submitted during this transaction (photos, videos, tracking info) may be used to resolve a dispute if one arises. "
@@ -1164,8 +1164,10 @@ class ChatBotService:
         USER_SESSIONS[seller_phone] = {"state": "AWAITING_DISCLAIMER_ACK", "deal_id": deal.id}
         USER_SESSIONS[buyer_phone] = {"state": "AWAITING_DISCLAIMER_ACK", "deal_id": deal.id}
         
-        MetaService.send_text_message(db, platform, seller_phone, disclaimer, deal.id)
-        if buyer_phone:
-            MetaService.send_text_message(db, platform, buyer_phone, disclaimer, deal.id)
+        # Send to passive party (do not log this duplicate copy to the shared ChatLog ledger)
+        if seller_phone != active_phone:
+            MetaService.send_text_message(db, platform, seller_phone, disclaimer, None)
+        if buyer_phone and buyer_phone != active_phone:
+            MetaService.send_text_message(db, platform, buyer_phone, disclaimer, None)
             
         return disclaimer
