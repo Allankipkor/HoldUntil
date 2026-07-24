@@ -325,6 +325,32 @@ export default function App() {
     }
   };
 
+  const handleResetStaffPasswordPrompt = async (username) => {
+    const newPassword = window.prompt(`Enter new password for ${username}:`);
+    if (newPassword === null) return;
+    if (newPassword.trim() === '') {
+      alert("Password cannot be empty.");
+      return;
+    }
+    try {
+      const fd = new FormData();
+      fd.append("username", username);
+      fd.append("new_password", newPassword);
+      const res = await fetch('/api/dashboard/staff/reset-password', {
+        method: 'POST',
+        body: fd
+      });
+      if (res.ok) {
+        alert(`Password for ${username} has been reset successfully.`);
+      } else {
+        const err = await res.json();
+        alert(err.detail || "Failed to reset password.");
+      }
+    } catch (err) {
+      alert("Connection error.");
+    }
+  };
+
   // ----------------------------------------------------
   // API INTERACTIONS
   // ----------------------------------------------------
@@ -2906,6 +2932,13 @@ export default function App() {
                                 style={{ padding: '4px 8px', fontSize: '0.75rem', background: 'rgba(239,68,68,0.1)', color: '#EF4444', borderColor: 'rgba(239,68,68,0.2)', cursor: 'pointer' }}
                               >
                                 Remove
+                              </button>
+                              <button 
+                                onClick={() => handleResetStaffPasswordPrompt(sm.phone_or_handle)}
+                                className="btn btn-secondary"
+                                style={{ padding: '4px 8px', fontSize: '0.75rem', marginLeft: '6px', background: 'rgba(59,130,246,0.1)', color: '#3B82F6', borderColor: 'rgba(59,130,246,0.2)', cursor: 'pointer' }}
+                              >
+                                Reset Password
                               </button>
                             </td>
                           </tr>

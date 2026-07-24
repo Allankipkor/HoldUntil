@@ -1400,5 +1400,71 @@ def test_reminder_policy_and_rating_skip(db_session):
     res_reply = MetaService.send_text_message(db_session, PlatformType.WHATSAPP.value, buyer.phone_or_handle, "Direct reply msg", deal_id=deal.id, is_urgent=False, is_direct_reply=True)
     assert res_reply is True
 
+def test_admin_reset_staff_password(db_session):
+    """Test that Admin can reset staff passwords, force session invalidation, and non-admins are blocked."""
+    from backend.app.models import User, UserRole, PlatformType
+    from backend.app.routes.dashboard import login_staff, reset_staff_password
+    import hashlib
+    from fastapi import HTTPException
+    import pytest
+
+    # 1. Seed Admin and Moderator
+    admin = User(
+        phone_or_handle="ADMIN_RESET_TEST",
+        role=UserRole.ADMIN,
+        platform=PlatformType.WHATSAPP,
+        password_hash=hashlib.sha256(b"adminpwd123").hexdigest(),
+        session_token="admin_token"
+    )
+    mediator = User(
+        phone_or_handle="MED_RESET_TEST",
+        role=UserRole.MODERATOR,
+        platform=PlatformType.WHATSAPP,
+        password_hash=hashlib.sha256(b"medpwd123").hexdigest(),
+        session_token="med_token"
+    )
+    db_session.add_all([admin, mediator])
+    db_session.commit()
+
+    # 2. Verify login works with original password
+    login_orig = login_staff(username="MED_RESET_TEST", password="medpwd123", db=db_session)
+    assert login_orig["token"] is not None
+    db_session.refresh(mediator)
+
+    # 3. Call password reset with admin privileges
+    reset_res = reset_staff_password(
+        username="MED_RESET_TEST",
+        new_password="newmedpwd123",
+        current_user=admin,
+        db=db_session
+    )
+    assert reset_res["status"] == "success"
+
+    # 4. Verify old session token was invalidated
+    db_session.refresh(mediator)
+    assert mediator.session_token is None
+
+    # 5. Verify login with old password fails
+    with pytest.raises(HTTPException) as exc_info:
+        login_staff(username="MED_RESET_TEST", password="medpwd123", db=db_session)
+    assert exc_info.value.status_code == 401
+
+    # 6. Verify login with new password succeeds
+    login_new = login_staff(username="MED_RESET_TEST", password="newmedpwd123", db=db_session)
+    assert login_new["token"] is not None
+    db_session.refresh(mediator)
+    assert mediator.session_token == login_new["token"]
+
+    # 7. Verify non-admin (moderator) is blocked from resetting password
+    with pytest.raises(HTTPException) as exc_info2:
+        reset_staff_password(
+            username="ADMIN_RESET_TEST",
+            new_password="hackadmin123",
+            current_user=mediator,
+            db=db_session
+        )
+    assert exc_info2.value.status_code == 403
+
+
 
 

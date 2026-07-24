@@ -752,6 +752,31 @@ def remove_staff_member(
     db.commit()
     return {"status": "success", "message": f"Removed staff user {staff.phone_or_handle}."}
 
+@router.post("/staff/reset-password")
+def reset_staff_password(
+    username: str = Form(...),
+    new_password: str = Form(...),
+    current_user: User = Depends(get_current_staff),
+    db: Session = Depends(get_db)
+):
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+        
+    staff = db.query(User).filter(User.phone_or_handle == username).first()
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff member not found")
+        
+    if staff.role not in [UserRole.MODERATOR, UserRole.ARBITRATOR, UserRole.ADMIN]:
+        raise HTTPException(status_code=400, detail="Cannot reset password of standard user")
+        
+    import hashlib
+    password_hash = hashlib.sha256(new_password.encode('utf-8')).hexdigest()
+    staff.password_hash = password_hash
+    staff.session_token = None
+    db.commit()
+    return {"status": "success", "message": f"Password reset for {username}."}
+
+
 @router.get("/settings")
 def get_system_settings(current_user: User = Depends(get_current_staff)):
     """Retrieve global configuration/rules."""
