@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, UTC
 from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy.orm import Session
-from backend.app.models import Deal, DealStatus, Evidence, Dispute, DisputeTier, OutcomeType, User
+from backend.app.models import Deal, DealStatus, Evidence, Dispute, DisputeTier, OutcomeType, User, ReminderTracker
 from backend.app.services.daraja_service import DarajaService
 from backend.app.services.meta_service import MetaService
 from backend.app.services.ai_service import AIService
@@ -9,6 +9,53 @@ import logging
 
 logger = logging.getLogger("scheduler")
 scheduler = BackgroundScheduler()
+def can_send_reminder(db: Session, recipient_phone: str, deal_id: str, pending_action: str, max_reminders: int = 2) -> bool:
+    deal = db.query(Deal).filter(Deal.id == deal_id).first()
+    if deal and deal.status in [DealStatus.COMPLETED, DealStatus.REFUNDED, DealStatus.CANCELLED]:
+        if pending_action != "rate_deal":
+            return False
+        
+    tracker = db.query(ReminderTracker).filter(
+        ReminderTracker.deal_id == deal_id,
+        ReminderTracker.recipient_phone == recipient_phone,
+        ReminderTracker.pending_action == pending_action
+    ).first()
+    
+    if tracker:
+        if tracker.reminder_count >= max_reminders:
+            return False
+        from backend.app.config import settings
+        from datetime import datetime, UTC
+        now = datetime.now(UTC).replace(tzinfo=None)
+        min_spacing = timedelta(seconds=5) if settings.SIMULATION_MODE else timedelta(hours=4)
+        if now - tracker.last_sent_at < min_spacing:
+            return False
+            
+    return True
+
+def record_reminder_sent(db: Session, recipient_phone: str, deal_id: str, pending_action: str):
+    tracker = db.query(ReminderTracker).filter(
+        ReminderTracker.deal_id == deal_id,
+        ReminderTracker.recipient_phone == recipient_phone,
+        ReminderTracker.pending_action == pending_action
+    ).first()
+    
+    from datetime import datetime, UTC
+    now = datetime.now(UTC).replace(tzinfo=None)
+    if tracker:
+        tracker.reminder_count += 1
+        tracker.last_sent_at = now
+    else:
+        tracker = ReminderTracker(
+            deal_id=deal_id,
+            recipient_phone=recipient_phone,
+            pending_action=pending_action,
+            reminder_count=1,
+            last_sent_at=now,
+            created_at=now
+        )
+        db.add(tracker)
+    db.commit()
 
 def run_tier_1_checks(db: Session):
     """
@@ -167,32 +214,32 @@ def run_tier_1_checks(db: Session):
         Dispute.resolved_at != None,
         Dispute.resolved_at < reminder_limit,
         Dispute.is_appeal == False,
-        Dispute.filer_satisfied == None,
-        Dispute.appeal_reminder_sent == False
+        Dispute.filer_satisfied == None
     ).all()
 
     for d in pending_reminders:
-        d.appeal_reminder_sent = True
-        db.commit()
-        
-        # Send reminder message to the filer
-        from backend.app.models import PlatformType
-        remaining_hours = int(getattr(settings, "APPEAL_WINDOW_HOURS", 72) / 2.0)
-        reminder_msg = f"Reminder: You have {remaining_hours} hours remaining to appeal this decision if you disagree. Reply APPEAL to request a senior review (KES 200 fee applies)."
-        
         deal = db.query(Deal).filter(Deal.id == d.deal_id).first()
-        reminder_components = [{
-            "type": "body",
-            "parameters": [
-                {"type": "text", "text": str(remaining_hours)},
-                {"type": "text", "text": deal.item_description[:30] if deal else "Deal"}
-            ]
-        }]
-        MetaService.send_template_message(
-            db, PlatformType.WHATSAPP, d.filer.phone_or_handle,
-            "dispute_appeal_reminder", components=reminder_components, deal_id=d.deal_id
-        )
-        logger.info(f"Sent proactive appeal reminder for Dispute {d.id} to user {d.filer.phone_or_handle}")
+        if can_send_reminder(db, d.filer.phone_or_handle, d.deal_id, "appeal_decision", max_reminders=2):
+            d.appeal_reminder_sent = True
+            db.commit()
+            
+            # Send reminder message to the filer
+            from backend.app.models import PlatformType
+            remaining_hours = int(getattr(settings, "APPEAL_WINDOW_HOURS", 72) / 2.0)
+            
+            reminder_components = [{
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": str(remaining_hours)},
+                    {"type": "text", "text": deal.item_description[:30] if deal else "Deal"}
+                ]
+            }]
+            MetaService.send_template_message(
+                db, PlatformType.WHATSAPP, d.filer.phone_or_handle,
+                "dispute_appeal_reminder", components=reminder_components, deal_id=d.deal_id
+            )
+            record_reminder_sent(db, d.filer.phone_or_handle, d.deal_id, "appeal_decision")
+            logger.info(f"Sent proactive appeal reminder for Dispute {d.id} to user {d.filer.phone_or_handle}")
 
     # 3.2 Process lapsed appeal windows
     pending_releases = db.query(Dispute).filter(
@@ -344,6 +391,58 @@ def run_tier_1_checks(db: Session):
                 db, PlatformType.WHATSAPP, deal.seller.phone_or_handle,
                 "dispute_response_lapsed", components=lapsed_components, deal_id=deal.id
             )
+
+    # 1. Delivery Confirmation Nudges
+    shipped_deals = db.query(Deal).filter(Deal.status == DealStatus.SHIPPED).all()
+    for deal in shipped_deals:
+        if deal.buyer and can_send_reminder(db, deal.buyer.phone_or_handle, deal.id, "confirm_receipt", max_reminders=2):
+            MetaService.send_text_message(
+                db, deal.buyer.platform.value if hasattr(deal.buyer.platform, 'value') else deal.buyer.platform,
+                deal.buyer.phone_or_handle,
+                f"📦 Reminder: Did you receive your item '{deal.item_description[:30]}' as described? Please reply YES or NO to confirm.",
+                deal.id,
+                is_urgent=False
+            )
+            record_reminder_sent(db, deal.buyer.phone_or_handle, deal.id, "confirm_receipt")
+            logger.info(f"Sent delivery confirmation nudge for Deal {deal.id} to buyer {deal.buyer.phone_or_handle}")
+
+    # 2. "Please Respond" Dispute Nudges
+    active_disputes = db.query(Dispute).filter(
+        Dispute.resolved_at == None,
+        Dispute.response_window_deadline != None
+    ).all()
+    for d in active_disputes:
+        deal = d.deal
+        if not deal:
+            continue
+        non_filer = deal.seller if d.filed_by == deal.buyer_id else deal.buyer
+        if non_filer and can_send_reminder(db, non_filer.phone_or_handle, deal.id, "respond_dispute", max_reminders=2):
+            MetaService.send_text_message(
+                db, non_filer.platform.value if hasattr(non_filer.platform, 'value') else non_filer.platform,
+                non_filer.phone_or_handle,
+                f"⚠️ Reminder: The other party has filed a dispute for '{deal.item_description[:30]}'. Please respond with your statement and evidence before the deadline.",
+                deal.id,
+                is_urgent=False
+            )
+            record_reminder_sent(db, non_filer.phone_or_handle, deal.id, "respond_dispute")
+            logger.info(f"Sent dispute response nudge for Dispute {d.id} to non-filer {non_filer.phone_or_handle}")
+
+    # 3. Rating Request Reminders
+    from backend.app.services.chat_bot import USER_SESSIONS
+    for handle, session in list(USER_SESSIONS.items()):
+        if session.get("state") == "AWAITING_RATING":
+            deal_id = session.get("deal_id")
+            if deal_id:
+                # Ratings are capped at 1 reminder maximum
+                if can_send_reminder(db, handle, deal_id, "rate_deal", max_reminders=1):
+                    MetaService.send_text_message(
+                        db, "whatsapp", handle,
+                        f"⭐ Reminder: Please rate your experience for your completed deal. Reply 👍 or 👎.",
+                        deal_id,
+                        is_urgent=False
+                    )
+                    record_reminder_sent(db, handle, deal_id, "rate_deal")
+                    logger.info(f"Sent rating reminder nudge for Deal {deal_id} to user {handle}")
 
 def start_scheduler(SessionLocalFactory):
     """Start APScheduler jobs."""

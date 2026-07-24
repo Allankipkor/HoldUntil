@@ -37,9 +37,12 @@ class RatingService:
         """
         Prompts both buyer and seller to manually rate each other.
         """
+        from backend.app.models import ReminderTracker
         seller = db.query(User).filter(User.id == deal.seller_id).first()
         buyer = db.query(User).filter(User.id == deal.buyer_id).first() if deal.buyer_id else None
         
+        now = datetime.now(UTC).replace(tzinfo=None)
+
         if seller:
             USER_SESSIONS[seller.phone_or_handle] = {"state": "AWAITING_RATING", "deal_id": deal.id}
             seller_components = [{
@@ -53,6 +56,17 @@ class RatingService:
                 db, seller.platform, seller.phone_or_handle,
                 "feedback_rating_prompt", components=seller_components, deal_id=deal.id
             )
+            # Create a reminder tracker entry for rating
+            tracker = ReminderTracker(
+                deal_id=deal.id,
+                recipient_phone=seller.phone_or_handle,
+                pending_action="rate_deal",
+                reminder_count=0,
+                last_sent_at=now,
+                created_at=now
+            )
+            db.add(tracker)
+            db.commit()
             
         if buyer:
             USER_SESSIONS[buyer.phone_or_handle] = {"state": "AWAITING_RATING", "deal_id": deal.id}
@@ -67,6 +81,17 @@ class RatingService:
                 db, buyer.platform, buyer.phone_or_handle,
                 "feedback_rating_prompt", components=buyer_components, deal_id=deal.id
             )
+            # Create a reminder tracker entry for rating
+            tracker = ReminderTracker(
+                deal_id=deal.id,
+                recipient_phone=buyer.phone_or_handle,
+                pending_action="rate_deal",
+                reminder_count=0,
+                last_sent_at=now,
+                created_at=now
+            )
+            db.add(tracker)
+            db.commit()
 
     @classmethod
     def apply_manual_rating(cls, db: Session, rating: Rating):
@@ -120,6 +145,21 @@ class RatingService:
             for handle, session in list(USER_SESSIONS.items()):
                 if session.get("state") == "AWAITING_RATING" and session.get("deal_id") == r.deal_id:
                     USER_SESSIONS[handle] = {"state": "IDLE", "deal_id": None}
+
+        # Clear expired rating trackers (skipped ratings)
+        from backend.app.models import ReminderTracker
+        expired_trackers = db.query(ReminderTracker).filter(
+            ReminderTracker.pending_action == "rate_deal",
+            ReminderTracker.created_at < window_limit
+        ).all()
+        
+        for tracker in expired_trackers:
+            session = USER_SESSIONS.get(tracker.recipient_phone)
+            if session and session.get("state") == "AWAITING_RATING" and session.get("deal_id") == tracker.deal_id:
+                logger.info(f"Skipping pending rating for user {tracker.recipient_phone} on deal {tracker.deal_id} (window expired)")
+                USER_SESSIONS[tracker.recipient_phone] = {"state": "IDLE", "deal_id": None}
+            db.delete(tracker)
+        db.commit()
 
     @classmethod
     def get_profile_summary(cls, db: Session, user: User) -> dict:

@@ -1282,4 +1282,123 @@ def test_staff_portal_authentication_and_scoping(db_session):
     # Admin should see both
     assert len(admin_queue) == 2
 
+def test_reminder_policy_and_rating_skip(db_session):
+    """Test capping, spacing, global rate limiting, rating skipping, and terminal state checks."""
+    from backend.app.models import User, UserRole, Deal, DealStatus, PlatformType, ReminderTracker, BotMessageLog, Rating, RatingSource
+    from backend.app.services.scheduler import can_send_reminder, record_reminder_sent, run_tier_1_checks
+    from backend.app.services.meta_service import MetaService
+    from backend.app.services.rating_service import RatingService
+    from backend.app.services.chat_bot import USER_SESSIONS
+    from datetime import datetime, UTC, timedelta
+
+    # Setup mock users and deal
+    buyer = User(phone_or_handle="254711111111", platform=PlatformType.WHATSAPP, role=UserRole.USER)
+    seller = User(phone_or_handle="254722222222", platform=PlatformType.WHATSAPP, role=UserRole.USER)
+    db_session.add_all([buyer, seller])
+    db_session.commit()
+
+    deal = Deal(seller_id=seller.id, buyer_id=buyer.id, item_description="Test Laptop", agreed_price=5000.0, status=DealStatus.SHIPPED)
+    db_session.add(deal)
+    db_session.commit()
+
+    # 1. Spacing and deduplication check
+    # Check that can_send_reminder is True initially
+    assert can_send_reminder(db_session, buyer.phone_or_handle, deal.id, "confirm_receipt") is True
+
+    # Record sending a reminder
+    record_reminder_sent(db_session, buyer.phone_or_handle, deal.id, "confirm_receipt")
+    
+    # Immediately after, spacing constraint should return False (within 5 seconds spacing in simulation mode)
+    assert can_send_reminder(db_session, buyer.phone_or_handle, deal.id, "confirm_receipt") is False
+
+    # Simulate spacing time elapsed (modify tracker's last_sent_at)
+    tracker = db_session.query(ReminderTracker).filter_by(
+        deal_id=deal.id, recipient_phone=buyer.phone_or_handle, pending_action="confirm_receipt"
+    ).first()
+    tracker.last_sent_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=6)
+    db_session.commit()
+
+    # Now it should be True again
+    assert can_send_reminder(db_session, buyer.phone_or_handle, deal.id, "confirm_receipt") is True
+
+    # Record 2nd reminder
+    record_reminder_sent(db_session, buyer.phone_or_handle, deal.id, "confirm_receipt")
+    
+    # Set spacing elapsed again
+    tracker.last_sent_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=6)
+    db_session.commit()
+
+    # Third reminder should be blocked by max_reminders limit (max 2)
+    assert can_send_reminder(db_session, buyer.phone_or_handle, deal.id, "confirm_receipt", max_reminders=2) is False
+
+    # 2. Terminal state check
+    # If deal becomes COMPLETED, no reminders should ever send
+    deal.status = DealStatus.COMPLETED
+    db_session.commit()
+    assert can_send_reminder(db_session, buyer.phone_or_handle, deal.id, "confirm_receipt", max_reminders=2) is False
+
+    # 3. Rating request capping (max 1 reminder) and skipped rating flow
+    deal2 = Deal(seller_id=seller.id, buyer_id=buyer.id, item_description="Another Item", agreed_price=1000.0, status=DealStatus.COMPLETED)
+    db_session.add(deal2)
+    db_session.commit()
+
+    # Initiate rating flow
+    RatingService.trigger_post_deal_rating(db_session, deal2)
+    assert USER_SESSIONS[buyer.phone_or_handle]["state"] == "AWAITING_RATING"
+    assert USER_SESSIONS[buyer.phone_or_handle]["deal_id"] == deal2.id
+
+    # Space it out from the initial prompt so the first reminder is allowed
+    tracker_rate = db_session.query(ReminderTracker).filter_by(
+        deal_id=deal2.id, recipient_phone=buyer.phone_or_handle, pending_action="rate_deal"
+    ).first()
+    tracker_rate.last_sent_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=6)
+    db_session.commit()
+
+    # Verify that we can send a reminder (max_reminders = 1)
+    assert can_send_reminder(db_session, buyer.phone_or_handle, deal2.id, "rate_deal", max_reminders=1) is True
+    
+    # Record reminder sent
+    record_reminder_sent(db_session, buyer.phone_or_handle, deal2.id, "rate_deal")
+    
+    # Space it out again
+    tracker_rate.last_sent_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=6)
+    db_session.commit()
+
+    # Verify that further rating reminders are blocked (max 1 reminder)
+    assert can_send_reminder(db_session, buyer.phone_or_handle, deal2.id, "rate_deal", max_reminders=1) is False
+
+    # Expiry of rating window (modify created_at of tracker to be past window)
+    # in simulation, window is 30 seconds
+    tracker_rate.created_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=35)
+    db_session.commit()
+
+    # Run scheduler checks (it calls RatingService.close_pending_ratings)
+    run_tier_1_checks(db_session)
+
+    # User session should be reset to IDLE (skipped rating)
+    assert USER_SESSIONS[buyer.phone_or_handle]["state"] == "IDLE"
+    assert USER_SESSIONS[buyer.phone_or_handle]["deal_id"] is None
+
+    # 4. Global Rate Limit Check
+    # Clear BotMessageLog for buyer
+    db_session.query(BotMessageLog).filter_by(recipient_phone=buyer.phone_or_handle).delete()
+    db_session.commit()
+
+    # Send 10 non-urgent messages
+    for i in range(10):
+        res = MetaService.send_text_message(db_session, PlatformType.WHATSAPP.value, buyer.phone_or_handle, f"Non-urgent msg {i}", deal_id=deal.id, is_urgent=False, is_direct_reply=False)
+        assert res is True
+
+    # The 11th non-urgent message should be blocked
+    res = MetaService.send_text_message(db_session, PlatformType.WHATSAPP.value, buyer.phone_or_handle, "Blocked msg", deal_id=deal.id, is_urgent=False, is_direct_reply=False)
+    assert res is False
+
+    # But an urgent message or direct reply should still go through
+    res_urgent = MetaService.send_text_message(db_session, PlatformType.WHATSAPP.value, buyer.phone_or_handle, "Urgent payment msg", deal_id=deal.id, is_urgent=True, is_direct_reply=False)
+    assert res_urgent is True
+
+    res_reply = MetaService.send_text_message(db_session, PlatformType.WHATSAPP.value, buyer.phone_or_handle, "Direct reply msg", deal_id=deal.id, is_urgent=False, is_direct_reply=True)
+    assert res_reply is True
+
+
 

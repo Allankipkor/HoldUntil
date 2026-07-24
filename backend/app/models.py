@@ -254,3 +254,30 @@ class CapturedPhoto(Base):
 
     # Relationships
     user = relationship("User", back_populates="captured_photos")
+
+class BotMessageLog(Base):
+    __tablename__ = "bot_message_logs"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    recipient_phone = Column(String(100), index=True, nullable=False)
+    deal_id = Column(String(36), ForeignKey("deals.id"), nullable=True)
+    message_content = Column(Text, nullable=True)
+    is_urgent = Column(Boolean, default=False, nullable=False)
+    is_direct_reply = Column(Boolean, default=False, nullable=False)
+    timestamp = Column(DateTime, default=utcnow, nullable=False)
+
+    deal = relationship("Deal")
+
+class ReminderTracker(Base):
+    __tablename__ = "reminder_trackers"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    deal_id = Column(String(36), ForeignKey("deals.id"), nullable=False)
+    recipient_phone = Column(String(100), nullable=False, index=True)
+    pending_action = Column(String(50), nullable=False)  # "confirm_receipt", "rate_deal", "respond_dispute", "appeal_decision"
+    reminder_count = Column(Integer, default=0, nullable=False)
+    last_sent_at = Column(DateTime, default=utcnow, nullable=False)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+
+    deal = relationship("Deal")
+

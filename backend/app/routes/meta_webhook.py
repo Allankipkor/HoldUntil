@@ -115,7 +115,8 @@ async def receive_meta_message(request: Request, db: Session = Depends(get_db)):
                                     platform=platform,
                                     recipient=sender,
                                     text=bot_reply,
-                                    deal_id=deal_id
+                                    deal_id=deal_id,
+                                    is_direct_reply=True
                                 )
                             except Exception as parse_err:
                                 logger.error(f"Error parsing webhook flow response json: {parse_err}")
@@ -156,7 +157,8 @@ async def receive_meta_message(request: Request, db: Session = Depends(get_db)):
                         platform=platform,
                         recipient=sender,
                         text=bot_reply,
-                        deal_id=deal_id
+                        deal_id=deal_id,
+                        is_direct_reply=True
                     )
 
             # Check for status updates (sent, delivered, read, deleted)

@@ -1179,14 +1179,7 @@ class ChatBotService:
                         f"Seller: {seller.phone_or_handle}\n"
                         f"Item: {deal.item_description}\n"
                         f"Price: KES {deal.agreed_price:.2f}\n\n"
-                        f"📜 **ESCROW AGREEMENT DISPUTE CLAUSE:**\n"
-                        f"In the event of a dispute, either party may submit a Notice of Dispute within 5 days of shipment/deadline. "
-                        f"Supporting evidence is required. HoldUntil shall freeze funds and facilitate a negotiation window. "
-                        f"If unresolved, the Escrow Agent shall render a binding decision based on strict compliance. "
-                        f"One appeal is permitted by replying 'APPEAL' (KES 200.00 fee applies), whose senior review is final "
-                        f"within HoldUntil's internal dispute process. Governed under Kenyan Law.\n\n"
-                        f"Reply 'CONFIRM' to accept details & initiate Safaricom M-Pesa STK Push payment.\n"
-                        f"Reply 'REJECT' to decline."
+                        f"📜 HOLDUNTIL ESCROW AGREEMENT: By proceeding, you agree to our Escrow Agreement and full Terms of Service (holduntil.onrender.com/terms). If a dispute arises, either party may resolve it informally by replying RELEASE or REFUND, or our system will review evidence and a trained mediator will render a first decision within 5 business days of a Notice of Dispute. Funds stay frozen during a 3-day window after that decision in case either party wants to appeal (KES 250 fee, refunded if the appeal changes the outcome, retained if upheld) — reviewed independently by a different, more senior HoldUntil reviewer. The senior reviewer's decision is final within HoldUntil's own internal process; this does not remove any rights you have under Kenyan law. A cancellation fee (0.5%) applies if you cancel after funding. HoldUntil is not a bank and is not affiliated with Safaricom, M-Pesa, Meta, WhatsApp, Instagram, or Messenger. Reply CONFIRM to accept and initiate M-Pesa STK Push payment, or REJECT to decline."
                     )
                     return response
             return "This deal is no longer open for joining."
@@ -1213,14 +1206,7 @@ class ChatBotService:
             f"Seller: {seller.phone_or_handle}\n"
             f"Item: {deal.item_description}\n"
             f"Price: KES {deal.agreed_price:.2f}\n\n"
-            f"📜 **ESCROW AGREEMENT DISPUTE CLAUSE:**\n"
-            f"In the event of a dispute, either party may submit a Notice of Dispute within 5 days of shipment/deadline. "
-            f"Supporting evidence is required. HoldUntil shall freeze funds and facilitate a negotiation window. "
-            f"If unresolved, the Escrow Agent shall render a binding decision based on strict compliance. "
-            f"One appeal is permitted by replying 'APPEAL' (KES 200.00 fee applies), whose senior review is final "
-            f"within HoldUntil's internal dispute process. Governed under Kenyan Law.\n\n"
-            f"Reply 'CONFIRM' to accept details & initiate Safaricom M-Pesa STK Push payment.\n"
-            f"Reply 'REJECT' to decline."
+            f"📜 HOLDUNTIL ESCROW AGREEMENT: By proceeding, you agree to our Escrow Agreement and full Terms of Service (holduntil.onrender.com/terms). If a dispute arises, either party may resolve it informally by replying RELEASE or REFUND, or our system will review evidence and a trained mediator will render a first decision within 5 business days of a Notice of Dispute. Funds stay frozen during a 3-day window after that decision in case either party wants to appeal (KES 250 fee, refunded if the appeal changes the outcome, retained if upheld) — reviewed independently by a different, more senior HoldUntil reviewer. The senior reviewer's decision is final within HoldUntil's own internal process; this does not remove any rights you have under Kenyan law. A cancellation fee (0.5%) applies if you cancel after funding. HoldUntil is not a bank and is not affiliated with Safaricom, M-Pesa, Meta, WhatsApp, Instagram, or Messenger. Reply CONFIRM to accept and initiate M-Pesa STK Push payment, or REJECT to decline."
         )
 
         # Get buyer's profile summary for the seller notification

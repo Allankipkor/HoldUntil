@@ -1,8 +1,8 @@
 import requests
-from datetime import datetime, UTC
+from datetime import datetime, UTC, timedelta
 from sqlalchemy.orm import Session
 from backend.app.config import settings
-from backend.app.models import User, UserRole, PlatformType, ChatLog
+from backend.app.models import User, UserRole, PlatformType, ChatLog, BotMessageLog
 import logging
 
 logger = logging.getLogger("meta_service")
@@ -41,11 +41,65 @@ class MetaService:
         return SYSTEM_BOT_ID
 
     @classmethod
-    def send_text_message(cls, db: Session, platform: str, recipient: str, text: str, deal_id: str = None) -> bool:
+    def _check_rate_limit_and_dedup(cls, db: Session, recipient: str, message_content: str, is_direct_reply: bool, is_urgent: bool) -> bool:
+        """
+        Returns True if the message can be sent, False if blocked by rate limits or deduplication.
+        """
+        now = datetime.now(UTC).replace(tzinfo=None)
+        
+        # 1. Deduplication Check
+        # Check if identical message was sent recently (last 5 mins in prod, 2s in simulation)
+        recent_window = timedelta(seconds=2) if settings.SIMULATION_MODE else timedelta(minutes=5)
+        duplicate = db.query(BotMessageLog).filter(
+            BotMessageLog.recipient_phone == recipient,
+            BotMessageLog.message_content == message_content,
+            BotMessageLog.timestamp > now - recent_window
+        ).first()
+        if duplicate:
+            logger.warning(f"Deduplication blocked message to {recipient}: {message_content[:50]}...")
+            return False
+            
+        # 2. Global Rate Limit Check
+        # Cap at 10 messages per 24h, excluding direct replies
+        # Urgent messages are always allowed through even if cap is hit.
+        if not is_direct_reply and not is_urgent:
+            twenty_four_hours_ago = now - timedelta(hours=24)
+            # Count total sent messages in the last 24h that were not direct replies
+            sent_count = db.query(BotMessageLog).filter(
+                BotMessageLog.recipient_phone == recipient,
+                BotMessageLog.is_direct_reply == False,
+                BotMessageLog.timestamp > twenty_four_hours_ago
+            ).count()
+            
+            if sent_count >= 10:
+                logger.warning(f"Global 24h rate limit hit for {recipient} ({sent_count} messages sent). Holding non-urgent notification.")
+                return False
+                
+        return True
+
+    @classmethod
+    def _log_bot_message(cls, db: Session, recipient: str, message_content: str, is_direct_reply: bool, is_urgent: bool, deal_id: str = None):
+        log_entry = BotMessageLog(
+            recipient_phone=recipient,
+            deal_id=deal_id,
+            message_content=message_content,
+            is_direct_reply=is_direct_reply,
+            is_urgent=is_urgent,
+            timestamp=datetime.now(UTC).replace(tzinfo=None)
+        )
+        db.add(log_entry)
+        db.commit()
+
+    @classmethod
+    def send_text_message(cls, db: Session, platform: str, recipient: str, text: str, deal_id: str = None, is_direct_reply: bool = False, is_urgent: bool = False, bypass_checks: bool = False) -> bool:
         """
         Send a text message via Meta Graph API or simulate it locally.
         Logs all outgoing messages in the database.
         """
+        if not bypass_checks:
+            if not cls._check_rate_limit_and_dedup(db, recipient, text, is_direct_reply, is_urgent):
+                return False
+
         logger.info(f"Sending message to {recipient} via {platform}: {text}")
         bot_id = cls._ensure_bot_user_exists(db)
 
@@ -59,6 +113,9 @@ class MetaService:
             )
             db.add(chat_log)
             db.commit()
+
+        if not bypass_checks:
+            cls._log_bot_message(db, recipient, text, is_direct_reply, is_urgent, deal_id)
 
         if settings.SIMULATION_MODE:
             logger.info(f"[SIMULATION] Outgoing message logged for deal {deal_id}")
@@ -98,15 +155,18 @@ class MetaService:
             return False
 
     @classmethod
-    def send_template_message(cls, db: Session, platform: str, recipient: str, template_name: str, language: str = "en", components: list = None, deal_id: str = None) -> bool:
+    def send_template_message(cls, db: Session, platform: str, recipient: str, template_name: str, language: str = "en", components: list = None, deal_id: str = None, is_direct_reply: bool = False, is_urgent: bool = False) -> bool:
         """
         Send a pre-approved Meta utility template message when outside the 24h window.
         """
+        if not cls._check_rate_limit_and_dedup(db, recipient, template_name, is_direct_reply, is_urgent):
+            return False
+
         # Validate template approval status
         status = cls.APPROVED_TEMPLATES.get(template_name, "PENDING")
         if status != "APPROVED":
             logger.error(f"Cannot send template '{template_name}': approval status is {status}")
-            return cls._fallback_to_free_form(db, platform, recipient, template_name, components, deal_id)
+            return cls._fallback_to_free_form(db, platform, recipient, template_name, components, deal_id, is_direct_reply, is_urgent)
 
         bot_id = cls._ensure_bot_user_exists(db)
         
@@ -126,6 +186,8 @@ class MetaService:
             )
             db.add(chat_log)
             db.commit()
+
+        cls._log_bot_message(db, recipient, template_name, is_direct_reply, is_urgent, deal_id)
 
         if settings.SIMULATION_MODE:
             return True
@@ -156,10 +218,10 @@ class MetaService:
             return True
         except Exception as e:
             logger.error(f"Failed to send Meta template message: {e}")
-            return cls._fallback_to_free_form(db, platform, recipient, template_name, components, deal_id)
+            return cls._fallback_to_free_form(db, platform, recipient, template_name, components, deal_id, is_direct_reply, is_urgent, bypass_checks=True)
 
     @classmethod
-    def _fallback_to_free_form(cls, db: Session, platform: str, recipient: str, template_name: str, components: list = None, deal_id: str = None) -> bool:
+    def _fallback_to_free_form(cls, db: Session, platform: str, recipient: str, template_name: str, components: list = None, deal_id: str = None, is_direct_reply: bool = False, is_urgent: bool = False, bypass_checks: bool = False) -> bool:
         """
         Fall back to a free-form text message if the template call fails and 
         the recipient has messaged the bot within the last 24 hours.
@@ -223,13 +285,17 @@ class MetaService:
             return False
 
         logger.info(f"Fallback triggered: sending free-form message to '{recipient}' within 24h window: {message_text}")
-        return cls.send_text_message(db, platform, recipient, message_text, deal_id)
+        return cls.send_text_message(db, platform, recipient, message_text, deal_id, is_direct_reply, is_urgent, bypass_checks=bypass_checks)
 
     @classmethod
-    def send_media_message(cls, db: Session, platform: str, recipient: str, media_url: str, caption: str = None, deal_id: str = None) -> bool:
+    def send_media_message(cls, db: Session, platform: str, recipient: str, media_url: str, caption: str = None, deal_id: str = None, is_direct_reply: bool = False, is_urgent: bool = False) -> bool:
         """
         Send image or media to the user.
         """
+        content_id = caption or "Sent media."
+        if not cls._check_rate_limit_and_dedup(db, recipient, content_id, is_direct_reply, is_urgent):
+            return False
+
         bot_id = cls._ensure_bot_user_exists(db)
 
         if deal_id:
@@ -242,6 +308,8 @@ class MetaService:
             )
             db.add(chat_log)
             db.commit()
+
+        cls._log_bot_message(db, recipient, content_id, is_direct_reply, is_urgent, deal_id)
 
         if settings.SIMULATION_MODE:
             return True
