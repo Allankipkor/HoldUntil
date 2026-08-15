@@ -76,14 +76,17 @@ class DarajaService:
         url = f"https://{'sandbox' if settings.DARAJA_ENV == 'sandbox' else 'api'}.safaricom.co.ke/mpesa/stkpush/v1/processrequest"
         headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
         
+        tx_type = getattr(settings, "DARAJA_TRANSACTION_TYPE", "CustomerPayBillOnline")
+        party_b = settings.DARAJA_BUY_GOODS_TILL if (tx_type == "CustomerBuyGoodsOnline" and getattr(settings, "DARAJA_BUY_GOODS_TILL", None)) else settings.DARAJA_SHORTCODE
+
         payload = {
             "BusinessShortCode": settings.DARAJA_SHORTCODE,
             "Password": password,
             "Timestamp": timestamp,
-            "TransactionType": "CustomerPayBillOnline",
+            "TransactionType": tx_type,
             "Amount": final_amount,
             "PartyA": formatted_phone,
-            "PartyB": settings.DARAJA_SHORTCODE,
+            "PartyB": party_b,
             "PhoneNumber": formatted_phone,
             "CallBackURL": settings.DARAJA_CALLBACK_URL,
             "AccountReference": f"Deal-{deal.id[:8]}",

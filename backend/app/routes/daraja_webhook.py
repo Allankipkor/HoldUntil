@@ -174,6 +174,7 @@ async def mpesa_c2b_confirmation(request: Request, db: Session = Depends(get_db)
     return {"ResultCode": 0, "ResultDesc": "Success"}
 
 @router.post("/b2c/callback")
+@router.post("/b2c_callback")
 async def mpesa_b2c_callback(request: Request, db: Session = Depends(get_db)):
     """Callback endpoint for B2C payout operations."""
     payload = await request.json()

@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     DARAJA_CONSUMER_KEY: str = "mock_consumer_key"
     DARAJA_CONSUMER_SECRET: str = "mock_consumer_secret"
     DARAJA_SHORTCODE: str = "174379"  # Paybill/Buy Goods
+    DARAJA_TRANSACTION_TYPE: str = "CustomerPayBillOnline"  # CustomerPayBillOnline (Paybill) or CustomerBuyGoodsOnline (Till)
+    DARAJA_BUY_GOODS_TILL: str = ""  # Optional specific till number if different from shortcode
     DARAJA_PASSKEY: str = "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919"
     DARAJA_B2C_SHORTCODE: str = "600000"
     DARAJA_INITIATOR_NAME: str = "testapi"
@@ -44,7 +46,7 @@ class Settings(BaseSettings):
     SLA_BREACH_HOURS: int = 72  # SLA deadline for moderator resolution
     SLA_WARN_HOURS: int = 48  # SLA warning threshold for moderator resolution
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=(".env", "backend/.env", "../.env"), extra="ignore")
 
 settings = Settings()
 
