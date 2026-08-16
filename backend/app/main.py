@@ -103,9 +103,14 @@ async def lifespan(app: FastAPI):
                 )
                 db.add(user)
                 logger.info(f"Seeded staff user: {phone} as {role.value}")
+        # Clean up historical test disputes so scheduler doesn't loop on old tests
+        from backend.app.models import Dispute
+        stale_disputes = db.query(Dispute).filter(Dispute.resolved_at != None, Dispute.filer_satisfied == None).all()
+        for sd in stale_disputes:
+            sd.filer_satisfied = True
         db.commit()
     except Exception as seed_err:
-        logger.error(f"Error seeding staff users: {seed_err}")
+        logger.error(f"Error during startup data initialization: {seed_err}")
     finally:
         db.close()
         

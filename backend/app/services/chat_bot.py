@@ -618,61 +618,88 @@ class ChatBotService:
         # State-based handling
         state = session["state"]
         if state == "AWAITING_RATING":
-            if text.strip() in ["👍", "👎"]:
-                score = 1.0 if text.strip() == "👍" else -1.0
-                
-                # Identify the ratee and deal
-                deal = db.query(Deal).filter(Deal.id == active_deal_id).first()
-                if not deal:
+            # Check if user is actively in another non-completed deal
+            active_live_deal = db.query(Deal).filter(
+                (Deal.seller_id == user.id) | (Deal.buyer_id == user.id),
+                Deal.status.in_([DealStatus.DRAFT, DealStatus.AWAITING_CONFIRMATION, DealStatus.FUNDED, DealStatus.SHIPPED, DealStatus.DELIVERY_PROMPTED])
+            ).order_by(Deal.created_at.desc()).first()
+
+            if active_live_deal and (normalized_text in ["1", "2", "3", "4", "CONFIRM", "I ACKNOWLEDGE", "ACKNOWLEDGE", "AGREE", "YES", "NO", "SELL"] or normalized_text.startswith("SHIPPED") or normalized_text.startswith("JOIN_")):
+                session["deal_id"] = active_live_deal.id
+                if not active_live_deal.transaction_type and active_live_deal.seller_confirmed and active_live_deal.buyer_confirmed:
+                    session["state"] = "AWAITING_TRANSACTION_TYPE"
+                    state = "AWAITING_TRANSACTION_TYPE"
+                elif active_live_deal.transaction_type and (not active_live_deal.seller_disclaimer_acknowledged or not active_live_deal.buyer_disclaimer_acknowledged):
+                    session["state"] = "AWAITING_DISCLAIMER_ACK"
+                    state = "AWAITING_DISCLAIMER_ACK"
+                else:
+                    session["state"] = "AWAITING_CONFIRMATION"
+                    state = "AWAITING_CONFIRMATION"
+
+            if state == "AWAITING_RATING":
+                clean_text = text.strip()
+                if clean_text in ["👍", "👎", "1", "2", "3", "4", "5"]:
+                    if clean_text in ["👍", "4", "5"]:
+                        score = 1.0
+                    elif clean_text in ["👎", "1", "2"]:
+                        score = -1.0
+                    else:
+                        score = 0.0
+                    
+                    # Identify the ratee and deal
+                    deal = db.query(Deal).filter(Deal.id == active_deal_id).first()
+                    if not deal:
+                        session["state"] = "IDLE"
+                        session["deal_id"] = None
+                        return "Thank you for your rating! Feedback recorded."
+                    
+                    ratee_id = deal.buyer_id if user.id == deal.seller_id else deal.seller_id
+                    
+                    # Check if this user already submitted a rating for this deal
+                    from backend.app.models import Rating, RatingSource
+                    existing_rating = db.query(Rating).filter(Rating.deal_id == deal.id, Rating.rater_id == user.id).first()
+                    if not existing_rating:
+                        rating = Rating(
+                            deal_id=deal.id,
+                            rater_id=user.id,
+                            ratee_id=ratee_id,
+                            score=score,
+                            rating_source=RatingSource.MANUAL
+                        )
+                        db.add(rating)
+                        db.commit()
+                    else:
+                        rating = existing_rating
+                    
+                    # Clear session state for this rater
                     session["state"] = "IDLE"
                     session["deal_id"] = None
-                    return "Error: Deal not found for this rating."
-                
-                ratee_id = deal.buyer_id if user.id == deal.seller_id else deal.seller_id
-                
-                # Check if this user already submitted a rating for this deal
-                from backend.app.models import Rating, RatingSource
-                existing_rating = db.query(Rating).filter(Rating.deal_id == deal.id, Rating.rater_id == user.id).first()
-                if not existing_rating:
-                    rating = Rating(
-                        deal_id=deal.id,
-                        rater_id=user.id,
-                        ratee_id=ratee_id,
-                        score=score,
-                        rating_source=RatingSource.MANUAL
-                    )
-                    db.add(rating)
-                    db.commit()
-                else:
-                    rating = existing_rating
-                
-                # Clear session state for this rater
-                session["state"] = "IDLE"
-                session["deal_id"] = None
-                
-                # Check if the other party has rated
-                other_id = deal.seller_id if user.id == deal.buyer_id else deal.buyer_id
-                other_rating = db.query(Rating).filter(Rating.deal_id == deal.id, Rating.rater_id == other_id).first()
-                
-                from backend.app.services.rating_service import RatingService
-                if other_rating:
-                    # Both have rated! Apply them and finalize
-                    RatingService.apply_manual_rating(db, rating)
-                    RatingService.apply_manual_rating(db, other_rating)
                     
-                    # Notify the other party if they are still awaiting rating
-                    other_user = db.query(User).filter(User.id == other_id).first()
-                    MetaService.send_text_message(
-                        db, platform, other_user.phone_or_handle,
-                        "Feedback submitted! Mutual ratings have been finalized and applied.",
-                        deal.id
-                    )
-                    return "Thank you for your feedback! Mutual ratings have been finalized and applied."
+                    # Check if the other party has rated
+                    other_id = deal.seller_id if user.id == deal.buyer_id else deal.buyer_id
+                    other_rating = db.query(Rating).filter(Rating.deal_id == deal.id, Rating.rater_id == other_id).first()
+                    
+                    from backend.app.services.rating_service import RatingService
+                    if other_rating:
+                        # Both have rated! Apply them and finalize
+                        RatingService.apply_manual_rating(db, rating)
+                        RatingService.apply_manual_rating(db, other_rating)
+                        
+                        # Notify the other party if they are still awaiting rating
+                        other_user = db.query(User).filter(User.id == other_id).first()
+                        if other_user:
+                            MetaService.send_text_message(
+                                db, platform, other_user.phone_or_handle,
+                                "Feedback submitted! Mutual ratings have been finalized and applied.",
+                                deal.id,
+                                is_urgent=True
+                            )
+                        return "Thank you for your feedback! Mutual ratings have been finalized and applied."
+                    else:
+                        # Only one has rated
+                        return "Feedback submitted! Your rating is hidden until the other party submits theirs or the window expires."
                 else:
-                    # Only one has rated
-                    return "Feedback submitted! Your rating is hidden until the other party submits theirs or the window expires."
-            else:
-                return "Please reply with 👍 or 👎 to rate your experience."
+                    return "Please reply with 👍 or 👎 (or a number 1 to 5) to rate your experience."
 
         elif state == "AWAITING_DESC":
             session["draft_desc"] = text

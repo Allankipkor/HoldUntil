@@ -53,7 +53,10 @@ class RatingService:
         now = datetime.now(UTC).replace(tzinfo=None)
 
         if seller:
-            USER_SESSIONS[seller.phone_or_handle] = {"state": "AWAITING_RATING", "deal_id": deal.id}
+            seller_session = USER_SESSIONS.get(seller.phone_or_handle, {})
+            if seller_session.get("state") in ["IDLE", None, "AWAITING_RATING"]:
+                USER_SESSIONS[seller.phone_or_handle] = {"state": "AWAITING_RATING", "deal_id": deal.id}
+            
             seller_components = [{
                 "type": "body",
                 "parameters": [
@@ -78,7 +81,10 @@ class RatingService:
             db.commit()
             
         if buyer:
-            USER_SESSIONS[buyer.phone_or_handle] = {"state": "AWAITING_RATING", "deal_id": deal.id}
+            buyer_session = USER_SESSIONS.get(buyer.phone_or_handle, {})
+            if buyer_session.get("state") in ["IDLE", None, "AWAITING_RATING"]:
+                USER_SESSIONS[buyer.phone_or_handle] = {"state": "AWAITING_RATING", "deal_id": deal.id}
+            
             buyer_components = [{
                 "type": "body",
                 "parameters": [
