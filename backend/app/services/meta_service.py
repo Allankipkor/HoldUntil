@@ -127,6 +127,8 @@ class MetaService:
             logger.info(f"[SIMULATION] Outgoing message logged for deal {deal_id}")
             return True
 
+        clean_recipient = str(recipient).replace("+", "").replace(" ", "").replace("-", "").strip()
+
         url = f"https://graph.facebook.com/{settings.META_API_VERSION}/{settings.META_PHONE_NUMBER_ID}/messages"
         headers = {
             "Authorization": f"Bearer {settings.META_ACCESS_TOKEN}",
@@ -137,7 +139,7 @@ class MetaService:
         payload = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
-            "to": recipient,
+            "to": clean_recipient,
             "type": "text",
             "text": {
                 "body": text
@@ -148,16 +150,18 @@ class MetaService:
         if platform in ["messenger", "instagram"]:
             url = f"https://graph.facebook.com/{settings.META_API_VERSION}/me/messages"
             payload = {
-                "recipient": {"id": recipient},
+                "recipient": {"id": clean_recipient},
                 "message": {"text": text}
             }
 
         try:
             response = requests.post(url, json=payload, headers=headers, timeout=10)
+            if response.status_code >= 400:
+                logger.error(f"Meta Graph API error {response.status_code} for {clean_recipient}: {response.text}")
             response.raise_for_status()
             return True
         except Exception as e:
-            logger.error(f"Failed to send Meta message: {e}")
+            logger.error(f"Failed to send Meta message to {clean_recipient}: {e}")
             # If plain text message failed (e.g. outside 24h window), try approved deal_status_alert template
             if platform in ["whatsapp", PlatformType.WHATSAPP] and deal_id and not is_direct_reply:
                 try:
@@ -173,7 +177,7 @@ class MetaService:
                         ]
                     }]
                     return cls.send_template_message(
-                        db, platform, recipient, "deal_status_alert", components=components, deal_id=deal_id, is_urgent=is_urgent
+                        db, platform, clean_recipient, "deal_status_alert", components=components, deal_id=deal_id, is_urgent=is_urgent
                     )
                 except Exception as t_err:
                     logger.error(f"Template fallback error: {t_err}")
@@ -198,7 +202,13 @@ class MetaService:
         # Format a descriptive text representation for simulation and logging
         component_text = f" [Template: {template_name}]"
         if components:
-            component_text += f" with parameters: {components}"
+            params = []
+            for comp in components:
+                for param in comp.get("parameters", []):
+                    if param.get("type") == "text":
+                        params.append(param.get("text", ""))
+            if params:
+                component_text = f" [Template: {template_name} - {', '.join(params)}]"
         
         logger.info(f"Sending template {template_name} to {recipient} via {platform}")
 
@@ -206,7 +216,7 @@ class MetaService:
             chat_log = ChatLog(
                 deal_id=deal_id,
                 sender_id=bot_id,
-                message_content=f"[Utility Reminder] {template_name}:{component_text}",
+                message_content=component_text,
                 timestamp=datetime.now(UTC).replace(tzinfo=None)
             )
             db.add(chat_log)
@@ -217,6 +227,8 @@ class MetaService:
         if settings.SIMULATION_MODE:
             return True
 
+        clean_recipient = str(recipient).replace("+", "").replace(" ", "").replace("-", "").strip()
+
         url = f"https://graph.facebook.com/{settings.META_API_VERSION}/{settings.META_PHONE_NUMBER_ID}/messages"
         headers = {
             "Authorization": f"Bearer {settings.META_ACCESS_TOKEN}",
@@ -225,7 +237,7 @@ class MetaService:
 
         payload = {
             "messaging_product": "whatsapp",
-            "to": recipient,
+            "to": clean_recipient,
             "type": "template",
             "template": {
                 "name": template_name,
@@ -239,11 +251,13 @@ class MetaService:
 
         try:
             response = requests.post(url, json=payload, headers=headers, timeout=10)
+            if response.status_code >= 400:
+                logger.error(f"Meta Template API error {response.status_code} for {clean_recipient}: {response.text}")
             response.raise_for_status()
             return True
         except Exception as e:
             logger.error(f"Failed to send Meta template message: {e}")
-            return cls._fallback_to_free_form(db, platform, recipient, template_name, components, deal_id, is_direct_reply, is_urgent, bypass_checks=True)
+            return cls._fallback_to_free_form(db, platform, clean_recipient, template_name, components, deal_id, is_direct_reply, is_urgent, bypass_checks=True)
 
     @classmethod
     def _fallback_to_free_form(cls, db: Session, platform: str, recipient: str, template_name: str, components: list = None, deal_id: str = None, is_direct_reply: bool = False, is_urgent: bool = False, bypass_checks: bool = False) -> bool:
