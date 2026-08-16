@@ -3,12 +3,16 @@ services:
     name: holduntil-backend
     runtime: python
     buildCommand: pip install -r backend/requirements.txt
-    startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port 10000
     envVars:
       - key: PORT
         value: 10000
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PYTHONPATH
+        value: "."
       - key: SIMULATION_MODE
-        value: "true"
+        value: "false"
       - key: DATABASE_URL
         value: "sqlite:///./holduntil.db"
       - key: META_API_VERSION
