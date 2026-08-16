@@ -1032,7 +1032,8 @@ class ChatBotService:
                             db, platform, deal.buyer.phone_or_handle,
                             f"📦 The seller has shipped the item! Tracking number: {tracking}.\n\n"
                             f"Did you receive your item as described? Reply YES or NO",
-                            deal.id
+                            deal.id,
+                            is_urgent=True
                         )
                         return "Got it! We have marked the item as shipped and notified the buyer to confirm receipt."
 
@@ -1065,7 +1066,8 @@ class ChatBotService:
                             MetaService.send_text_message(
                                 db, platform, deal.seller.phone_or_handle,
                                 f"🎉 Buyer confirmed receipt! KES {deal.agreed_price} has been paid out to your M-Pesa account.",
-                                deal.id
+                                deal.id,
+                                is_urgent=True
                             )
                             session["state"] = "IDLE"
                             session["deal_id"] = None
@@ -1094,7 +1096,8 @@ class ChatBotService:
                         MetaService.send_text_message(
                             db, platform, deal.seller.phone_or_handle,
                             f"⚠️ The buyer has disputed the delivery. HoldUntil escrow funds are locked. We will collect statements from both parties for moderation.",
-                            deal.id
+                            deal.id,
+                            is_urgent=True
                         )
                         return (
                             "⚠️ WARNING: Filing false/meritless disputes is a violation of HoldUntil terms. "

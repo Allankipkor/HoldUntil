@@ -60,7 +60,7 @@ class MetaService:
             return False
             
         # 2. Global Rate Limit Check
-        # Cap at 10 messages per 24h, excluding direct replies
+        # Cap at 50 messages per 24h for non-urgent notifications
         # Urgent messages are always allowed through even if cap is hit.
         if not is_direct_reply and not is_urgent:
             twenty_four_hours_ago = now - timedelta(hours=24)
@@ -71,7 +71,7 @@ class MetaService:
                 BotMessageLog.timestamp > twenty_four_hours_ago
             ).count()
             
-            if sent_count >= 10:
+            if sent_count >= 50:
                 logger.warning(f"Global 24h rate limit hit for {recipient} ({sent_count} messages sent). Holding non-urgent notification.")
                 return False
                 
