@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, Form, HTTPException
+from fastapi import FastAPI, Depends, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from sqlalchemy.orm import Session
@@ -132,6 +132,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def normalize_path_middleware(request: Request, call_next):
+    if "//" in request.url.path:
+        cleaned_path = "/" + "/".join([part for part in request.url.path.split("/") if part])
+        request.scope["path"] = cleaned_path
+    return await call_next(request)
 
 # Attach Webhook and Dashboard Routers
 app.include_router(meta_webhook.router, prefix="/api")

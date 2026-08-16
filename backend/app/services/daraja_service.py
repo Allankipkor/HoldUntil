@@ -79,6 +79,13 @@ class DarajaService:
         tx_type = getattr(settings, "DARAJA_TRANSACTION_TYPE", "CustomerPayBillOnline")
         party_b = settings.DARAJA_BUY_GOODS_TILL if (tx_type == "CustomerBuyGoodsOnline" and getattr(settings, "DARAJA_BUY_GOODS_TILL", None)) else settings.DARAJA_SHORTCODE
 
+        clean_callback_url = (settings.DARAJA_CALLBACK_URL or "").strip()
+        if "://" in clean_callback_url:
+            scheme, rest = clean_callback_url.split("://", 1)
+            while "//" in rest:
+                rest = rest.replace("//", "/")
+            clean_callback_url = f"{scheme}://{rest}"
+
         payload = {
             "BusinessShortCode": settings.DARAJA_SHORTCODE,
             "Password": password,
@@ -88,7 +95,7 @@ class DarajaService:
             "PartyA": formatted_phone,
             "PartyB": party_b,
             "PhoneNumber": formatted_phone,
-            "CallBackURL": settings.DARAJA_CALLBACK_URL,
+            "CallBackURL": clean_callback_url,
             "AccountReference": f"Deal-{deal.id[:8]}",
             "TransactionDesc": f"HoldUntil Escrow Deal {deal.id[:8]}"
         }
@@ -223,11 +230,18 @@ class DarajaService:
                 RatingService.trigger_post_deal_rating(db, deal)
                 return
 
-            # Production Daraja call
+        # Production Daraja call
             access_token = cls._get_access_token()
             url = f"https://{'sandbox' if settings.DARAJA_ENV == 'sandbox' else 'api'}.safaricom.co.ke/mpesa/b2c/v1/paymentrequest"
             headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
             
+            clean_b2c_url = (settings.DARAJA_B2C_CALLBACK_URL or "").strip()
+            if "://" in clean_b2c_url:
+                b2c_scheme, b2c_rest = clean_b2c_url.split("://", 1)
+                while "//" in b2c_rest:
+                    b2c_rest = b2c_rest.replace("//", "/")
+                clean_b2c_url = f"{b2c_scheme}://{b2c_rest}"
+
             payload = {
                 "InitiatorName": settings.DARAJA_INITIATOR_NAME,
                 "SecurityCredential": settings.DARAJA_SECURITY_CREDENTIAL,
@@ -236,8 +250,8 @@ class DarajaService:
                 "PartyA": settings.DARAJA_B2C_SHORTCODE,
                 "PartyB": formatted_phone,
                 "Remarks": f"Escrow Payout for Deal {deal.id[:8]}",
-                "QueueTimeOutURL": settings.DARAJA_B2C_CALLBACK_URL,
-                "ResultURL": settings.DARAJA_B2C_CALLBACK_URL,
+                "QueueTimeOutURL": clean_b2c_url,
+                "ResultURL": clean_b2c_url,
                 "Occasion": "EscrowPayout" if not is_refund else "EscrowRefund"
             }
             
