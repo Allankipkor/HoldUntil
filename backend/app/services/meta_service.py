@@ -41,40 +41,46 @@ class MetaService:
         return SYSTEM_BOT_ID
 
     @classmethod
-    def _check_rate_limit_and_dedup(cls, db: Session, recipient: str, message_content: str, is_direct_reply: bool, is_urgent: bool) -> bool:
+    @classmethod
+    def _check_rate_limit_and_dedup(cls, db: Session, recipient: str, message_content: str, is_direct_reply: bool, is_urgent: bool, deal_id: str = None) -> bool:
         """
-        Returns True if the message can be sent, False if blocked by rate limits or deduplication.
+        Smart Rate Limiter & Deduplication:
+        - Transactional messages (linked to a deal_id), direct replies, and urgent messages are NEVER rate limited.
+        - Deduplication check prevents instant double-posts (within 3 seconds).
+        - Purely generic background marketing/nudges without a deal_id are capped at 50/24h.
         """
         now = datetime.now(UTC).replace(tzinfo=None)
         
-        # 1. Deduplication Check
-        # Check if identical message was sent recently (last 5 mins in prod, 2s in simulation)
-        recent_window = timedelta(seconds=2) if settings.SIMULATION_MODE else timedelta(minutes=5)
+        # 1. Deduplication Check (3 seconds window)
+        # Blocks accidental double-clicks or parallel worker race conditions
+        recent_window = timedelta(seconds=3)
         duplicate = db.query(BotMessageLog).filter(
             BotMessageLog.recipient_phone == recipient,
             BotMessageLog.message_content == message_content,
             BotMessageLog.timestamp > now - recent_window
         ).first()
         if duplicate:
-            logger.warning(f"Deduplication blocked message to {recipient}: {message_content[:50]}...")
+            logger.warning(f"Deduplication blocked rapid repeat message to {recipient}: {message_content[:50]}...")
             return False
             
-        # 2. Global Rate Limit Check
-        # Cap at 50 messages per 24h for non-urgent notifications
-        # Urgent messages are always allowed through even if cap is hit.
-        if not is_direct_reply and not is_urgent:
-            twenty_four_hours_ago = now - timedelta(hours=24)
-            # Count total sent messages in the last 24h that were not direct replies
-            sent_count = db.query(BotMessageLog).filter(
-                BotMessageLog.recipient_phone == recipient,
-                BotMessageLog.is_direct_reply == False,
-                BotMessageLog.timestamp > twenty_four_hours_ago
-            ).count()
+        # 2. Transactional & Active Deal Exemption:
+        # All messages associated with a deal, direct conversational replies, or marked urgent are unconditionally allowed.
+        if is_direct_reply or is_urgent or deal_id:
+            return True
             
-            if sent_count >= 50:
-                logger.warning(f"Global 24h rate limit hit for {recipient} ({sent_count} messages sent). Holding non-urgent notification.")
-                return False
-                
+        # 3. For generic background messages without a deal_id, cap at 50/day
+        twenty_four_hours_ago = now - timedelta(hours=24)
+        sent_count = db.query(BotMessageLog).filter(
+            BotMessageLog.recipient_phone == recipient,
+            BotMessageLog.is_direct_reply == False,
+            BotMessageLog.deal_id == None,
+            BotMessageLog.timestamp > twenty_four_hours_ago
+        ).count()
+        
+        if sent_count >= 50:
+            logger.warning(f"Global 24h rate limit hit for {recipient} ({sent_count} non-deal messages sent). Holding notification.")
+            return False
+            
         return True
 
     @classmethod
@@ -97,7 +103,7 @@ class MetaService:
         Logs all outgoing messages in the database.
         """
         if not bypass_checks:
-            if not cls._check_rate_limit_and_dedup(db, recipient, text, is_direct_reply, is_urgent):
+            if not cls._check_rate_limit_and_dedup(db, recipient, text, is_direct_reply, is_urgent, deal_id=deal_id):
                 return False
 
         logger.info(f"Sending message to {recipient} via {platform}: {text}")
@@ -178,7 +184,7 @@ class MetaService:
         """
         Send a pre-approved Meta utility template message when outside the 24h window.
         """
-        if not cls._check_rate_limit_and_dedup(db, recipient, template_name, is_direct_reply, is_urgent):
+        if not cls._check_rate_limit_and_dedup(db, recipient, template_name, is_direct_reply, is_urgent, deal_id=deal_id):
             return False
 
         # Validate template approval status

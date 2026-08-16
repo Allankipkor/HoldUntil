@@ -33,11 +33,20 @@ class RatingService:
             CLOSED_DEAL_SESSIONS.add(deal.id)
 
     @classmethod
+    @classmethod
     def _initiate_manual_rating_flow(cls, db: Session, deal: Deal):
         """
-        Prompts both buyer and seller to manually rate each other.
+        Prompts both buyer and seller to manually rate each other (sent exactly once).
         """
         from backend.app.models import ReminderTracker
+        existing_tracker = db.query(ReminderTracker).filter(
+            ReminderTracker.deal_id == deal.id,
+            ReminderTracker.pending_action == "rate_deal"
+        ).first()
+        if existing_tracker:
+            logger.info(f"Rating flow already initiated for Deal {deal.id}. Skipping duplicate prompt.")
+            return
+
         seller = db.query(User).filter(User.id == deal.seller_id).first()
         buyer = db.query(User).filter(User.id == deal.buyer_id).first() if deal.buyer_id else None
         
@@ -54,7 +63,7 @@ class RatingService:
             }]
             MetaService.send_template_message(
                 db, seller.platform, seller.phone_or_handle,
-                "feedback_rating_prompt", components=seller_components, deal_id=deal.id
+                "feedback_rating_prompt", components=seller_components, deal_id=deal.id, is_urgent=True
             )
             # Create a reminder tracker entry for rating
             tracker = ReminderTracker(
@@ -79,7 +88,7 @@ class RatingService:
             }]
             MetaService.send_template_message(
                 db, buyer.platform, buyer.phone_or_handle,
-                "feedback_rating_prompt", components=buyer_components, deal_id=deal.id
+                "feedback_rating_prompt", components=buyer_components, deal_id=deal.id, is_urgent=True
             )
             # Create a reminder tracker entry for rating
             tracker = ReminderTracker(

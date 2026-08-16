@@ -253,15 +253,25 @@ def run_tier_1_checks(db: Session):
         # Check if the deal is still in DISPUTED status
         deal = db.query(Deal).filter(Deal.id == d.deal_id, Deal.status == DealStatus.DISPUTED).first()
         if deal:
-            logger.info(f"Appeal window expired for Dispute {d.id}. Executing payout for verdict: {d.final_outcome}")
+            logger.info(f"Appeal window expired for Dispute {d.id}. Finalizing verdict: {d.final_outcome}")
             
+            # 1. Mark dispute and deal finalized immediately so this dispute is NEVER re-processed
+            d.filer_satisfied = True
+            d.appeal_resolved_at = now
+            if d.final_outcome == OutcomeType.RELEASE:
+                deal.status = DealStatus.COMPLETED
+            elif d.final_outcome == OutcomeType.REFUND:
+                deal.status = DealStatus.REFUNDED
+            elif d.final_outcome == OutcomeType.PARTIAL_SPLIT:
+                deal.status = DealStatus.COMPLETED
+            db.commit()
+            
+            seller = db.query(User).filter(User.id == deal.seller_id).first()
+            buyer = db.query(User).filter(User.id == deal.buyer_id).first()
+            
+            # 2. Send dispute verdict notifications once (marked is_urgent=True)
             try:
-                seller = db.query(User).filter(User.id == deal.seller_id).first()
-                buyer = db.query(User).filter(User.id == deal.buyer_id).first()
-                
                 if d.final_outcome == OutcomeType.RELEASE:
-                    DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, deal.agreed_price, is_refund=False)
-                    
                     seller_components = [{
                         "type": "body",
                         "parameters": [
@@ -271,7 +281,7 @@ def run_tier_1_checks(db: Session):
                             {"type": "text", "text": "Thank you for transacting with HoldUntil."}
                         ]
                     }]
-                    MetaService.send_template_message(db, deal.seller.platform, seller.phone_or_handle, "dispute_verdict_notification", components=seller_components, deal_id=deal.id)
+                    MetaService.send_template_message(db, deal.seller.platform, seller.phone_or_handle, "dispute_verdict_notification", components=seller_components, deal_id=deal.id, is_urgent=True)
                     
                     buyer_components = [{
                         "type": "body",
@@ -282,10 +292,14 @@ def run_tier_1_checks(db: Session):
                             {"type": "text", "text": "Thank you for transacting with HoldUntil."}
                         ]
                     }]
-                    MetaService.send_template_message(db, deal.buyer.platform, buyer.phone_or_handle, "dispute_verdict_notification", components=buyer_components, deal_id=deal.id)
-                elif d.final_outcome == OutcomeType.REFUND:
-                    DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, deal.agreed_price, is_refund=True)
+                    MetaService.send_template_message(db, deal.buyer.platform, buyer.phone_or_handle, "dispute_verdict_notification", components=buyer_components, deal_id=deal.id, is_urgent=True)
                     
+                    try:
+                        DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, deal.agreed_price, is_refund=False)
+                    except Exception as pay_err:
+                        logger.error(f"B2C payout pending configuration for seller {seller.phone_or_handle}: {pay_err}")
+
+                elif d.final_outcome == OutcomeType.REFUND:
                     buyer_components = [{
                         "type": "body",
                         "parameters": [
@@ -295,7 +309,7 @@ def run_tier_1_checks(db: Session):
                             {"type": "text", "text": "Thank you for transacting with HoldUntil."}
                         ]
                     }]
-                    MetaService.send_template_message(db, deal.buyer.platform, buyer.phone_or_handle, "dispute_verdict_notification", components=buyer_components, deal_id=deal.id)
+                    MetaService.send_template_message(db, deal.buyer.platform, buyer.phone_or_handle, "dispute_verdict_notification", components=buyer_components, deal_id=deal.id, is_urgent=True)
                     
                     seller_components = [{
                         "type": "body",
@@ -306,13 +320,17 @@ def run_tier_1_checks(db: Session):
                             {"type": "text", "text": "The transaction is closed."}
                         ]
                     }]
-                    MetaService.send_template_message(db, deal.seller.platform, seller.phone_or_handle, "dispute_verdict_notification", components=seller_components, deal_id=deal.id)
+                    MetaService.send_template_message(db, deal.seller.platform, seller.phone_or_handle, "dispute_verdict_notification", components=seller_components, deal_id=deal.id, is_urgent=True)
+                    
+                    try:
+                        DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, deal.agreed_price, is_refund=True)
+                    except Exception as pay_err:
+                        logger.error(f"B2C payout pending configuration for buyer {buyer.phone_or_handle}: {pay_err}")
+
                 elif d.final_outcome == OutcomeType.PARTIAL_SPLIT:
                     pct = d.partial_split_percentage or 50
                     seller_amt = (pct / 100.0) * deal.agreed_price
                     buyer_amt = deal.agreed_price - seller_amt
-                    DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, seller_amt, is_refund=False)
-                    DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, buyer_amt, is_refund=True)
                     
                     seller_components = [{
                         "type": "body",
@@ -323,7 +341,7 @@ def run_tier_1_checks(db: Session):
                             {"type": "text", "text": "Thank you for transacting with HoldUntil."}
                         ]
                     }]
-                    MetaService.send_template_message(db, deal.seller.platform, seller.phone_or_handle, "dispute_verdict_notification", components=seller_components, deal_id=deal.id)
+                    MetaService.send_template_message(db, deal.seller.platform, seller.phone_or_handle, "dispute_verdict_notification", components=seller_components, deal_id=deal.id, is_urgent=True)
                     
                     buyer_components = [{
                         "type": "body",
@@ -334,14 +352,19 @@ def run_tier_1_checks(db: Session):
                             {"type": "text", "text": "Thank you for transacting with HoldUntil."}
                         ]
                     }]
-                    MetaService.send_template_message(db, deal.buyer.platform, buyer.phone_or_handle, "dispute_verdict_notification", components=buyer_components, deal_id=deal.id)
+                    MetaService.send_template_message(db, deal.buyer.platform, buyer.phone_or_handle, "dispute_verdict_notification", components=buyer_components, deal_id=deal.id, is_urgent=True)
+                    
+                    try:
+                        DarajaService.initiate_b2c_payout(db, deal, seller.phone_or_handle, seller_amt, is_refund=False)
+                        DarajaService.initiate_b2c_payout(db, deal, buyer.phone_or_handle, buyer_amt, is_refund=True)
+                    except Exception as pay_err:
+                        logger.error(f"B2C split payout pending configuration: {pay_err}")
                 
                 AIService.apply_dispute_outcome(db, deal, d, d.final_outcome, partial_split_percentage=d.partial_split_percentage)
                 db.commit()
-                
                 RatingService.trigger_post_deal_rating(db, deal)
             except Exception as e:
-                logger.error(f"Failed B2C payout for Rule 3 dispute {d.id}: {e}")
+                logger.error(f"Error finalizing expired dispute {d.id}: {e}")
 
     # Rule 4: Processing lapsed dispute response windows
     pending_responses = db.query(Dispute).filter(
