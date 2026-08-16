@@ -33,7 +33,6 @@ class RatingService:
             CLOSED_DEAL_SESSIONS.add(deal.id)
 
     @classmethod
-    @classmethod
     def _initiate_manual_rating_flow(cls, db: Session, deal: Deal):
         """
         Prompts both buyer and seller to manually rate each other (sent exactly once).

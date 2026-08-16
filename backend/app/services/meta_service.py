@@ -41,7 +41,6 @@ class MetaService:
         return SYSTEM_BOT_ID
 
     @classmethod
-    @classmethod
     def _check_rate_limit_and_dedup(cls, db: Session, recipient: str, message_content: str, is_direct_reply: bool, is_urgent: bool, deal_id: str = None) -> bool:
         """
         Smart Rate Limiter & Deduplication:
