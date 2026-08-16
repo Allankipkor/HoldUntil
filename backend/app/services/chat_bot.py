@@ -824,7 +824,8 @@ class ChatBotService:
                 session["state"] = "IDLE"
                 return "Error: No active deal found."
                 
-            if normalized_text == "I ACKNOWLEDGE":
+            is_ack = normalized_text in ["I ACKNOWLEDGE", "ACKNOWLEDGE", "AGREE", "I AGREE", "ACCEPT", "YES"] or "ACKNOWLEDGE" in normalized_text
+            if is_ack:
                 if user.id == deal.seller_id:
                     deal.seller_disclaimer_acknowledged = True
                 elif user.id == deal.buyer_id:
@@ -848,7 +849,8 @@ class ChatBotService:
                             db, platform, deal.buyer.phone_or_handle,
                             f"Deal '{deal.item_description[:30]}...' disclaimer acknowledged by both parties! "
                             f"We have sent an M-Pesa STK Push to your phone. Please check your phone and enter your PIN to complete payment.",
-                            deal.id
+                            deal.id,
+                            is_urgent=True
                         )
                         try:
                             DarajaService.initiate_stk_push(db, deal, buyer_user.phone_or_handle)
@@ -858,7 +860,8 @@ class ChatBotService:
                             MetaService.send_text_message(
                                 db, platform, deal.buyer.phone_or_handle,
                                 f"Failed to initiate M-Pesa STK push: {str(e)}",
-                                deal.id
+                                deal.id,
+                                is_urgent=True
                             )
                             return f"Disclaimer acknowledged, but M-Pesa STK Push trigger failed: {str(e)}"
                         
@@ -873,7 +876,8 @@ class ChatBotService:
                             db, platform, deal.seller.phone_or_handle,
                             f"Deal '{deal.item_description[:30]}...' disclaimer acknowledged by both parties! "
                             f"We are triggering the M-Pesa STK Push payment request to the buyer now.",
-                            deal.id
+                            deal.id,
+                            is_urgent=True
                         )
                         try:
                             DarajaService.initiate_stk_push(db, deal, buyer_user.phone_or_handle)
@@ -886,9 +890,27 @@ class ChatBotService:
                             return f"You acknowledged the disclaimer, but M-Pesa STK Push trigger failed: {str(e)}"
                 else:
                     other_party = "Buyer" if user.id == deal.seller_id else "Seller"
+                    other_phone = deal.buyer.phone_or_handle if user.id == deal.seller_id else deal.seller.phone_or_handle
+                    
+                    # Ensure other party session is in AWAITING_DISCLAIMER_ACK
+                    USER_SESSIONS[other_phone] = {"state": "AWAITING_DISCLAIMER_ACK", "deal_id": deal.id}
+                    
+                    # Immediately notify the other party with the disclaimer prompt so they aren't left waiting
+                    ack_prompt = (
+                        f"⚠️ IMPORTANT TRANSACTION DISCLAIMER for '{deal.item_description[:30]}...' ⚠️\n\n"
+                        f"The {('seller' if user.id == deal.seller_id else 'buyer')} has confirmed and acknowledged the terms!\n\n"
+                        f"Evidence submitted during this transaction (photos, videos, tracking info) may be used to resolve a dispute if one arises. "
+                        f"Please take evidence seriously and ensure it clearly reflects what actually happened — "
+                        f"false or misleading evidence affects your trust score.\n\n"
+                        f"Reply 'I ACKNOWLEDGE' to agree and trigger the M-Pesa STK Push payment."
+                    )
+                    MetaService.send_text_message(
+                        db, platform, other_phone, ack_prompt, deal.id, is_urgent=True
+                    )
+                    
                     return f"Acknowledgement recorded! Waiting for the {other_party} to acknowledge the disclaimer."
             else:
-                return "Please reply exactly 'I ACKNOWLEDGE' to agree to the disclaimer."
+                return "Please reply 'I ACKNOWLEDGE' to agree to the disclaimer."
 
         # Deal confirmation & execution states
         if active_deal_id:
@@ -896,6 +918,58 @@ class ChatBotService:
             if deal:
                 # Handle confirmations
                 if deal.status == DealStatus.AWAITING_CONFIRMATION:
+                    # Check if disclaimers are pending first
+                    is_ack = normalized_text in ["I ACKNOWLEDGE", "ACKNOWLEDGE", "AGREE", "I AGREE", "ACCEPT", "YES"] or "ACKNOWLEDGE" in normalized_text
+                    if is_ack and deal.transaction_type and (not deal.seller_disclaimer_acknowledged or not deal.buyer_disclaimer_acknowledged):
+                        if user.id == deal.seller_id:
+                            deal.seller_disclaimer_acknowledged = True
+                        elif user.id == deal.buyer_id:
+                            deal.buyer_disclaimer_acknowledged = True
+                        db.commit()
+                        
+                        if deal.seller_disclaimer_acknowledged and deal.buyer_disclaimer_acknowledged:
+                            buyer_user = db.query(User).filter(User.id == deal.buyer_id).first()
+                            USER_SESSIONS[deal.seller.phone_or_handle] = {"state": "IDLE", "deal_id": deal.id}
+                            USER_SESSIONS[deal.buyer.phone_or_handle] = {"state": "IDLE", "deal_id": deal.id}
+                            
+                            other_phone = deal.buyer.phone_or_handle if user.id == deal.seller_id else deal.seller.phone_or_handle
+                            MetaService.send_text_message(
+                                db, platform, other_phone,
+                                f"Deal '{deal.item_description[:30]}...' disclaimer acknowledged by both parties! "
+                                f"We are triggering the M-Pesa STK Push payment request to the buyer now.",
+                                deal.id,
+                                is_urgent=True
+                            )
+                            try:
+                                DarajaService.initiate_stk_push(db, deal, buyer_user.phone_or_handle)
+                            except Exception as e:
+                                logger.error(f"Failed to initiate STK push: {e}")
+                                return f"Disclaimer acknowledged, but M-Pesa STK Push trigger failed: {str(e)}"
+                            
+                            if user.id == deal.buyer_id:
+                                return (
+                                    f"You have acknowledged the disclaimer. We have sent an M-Pesa STK Push to your phone. "
+                                    f"Please check your phone and enter your PIN to complete payment."
+                                )
+                            else:
+                                return (
+                                    f"You have acknowledged the disclaimer. Deal '{deal.item_description[:30]}...' "
+                                    f"disclaimer acknowledged by both parties! We are triggering the M-Pesa STK Push payment request to the buyer now."
+                                )
+                        else:
+                            other_party = "Buyer" if user.id == deal.seller_id else "Seller"
+                            other_phone = deal.buyer.phone_or_handle if user.id == deal.seller_id else deal.seller.phone_or_handle
+                            USER_SESSIONS[other_phone] = {"state": "AWAITING_DISCLAIMER_ACK", "deal_id": deal.id}
+                            ack_prompt = (
+                                f"⚠️ IMPORTANT TRANSACTION DISCLAIMER for '{deal.item_description[:30]}...' ⚠️\n\n"
+                                f"The {('seller' if user.id == deal.seller_id else 'buyer')} has confirmed and acknowledged the terms!\n\n"
+                                f"Reply 'I ACKNOWLEDGE' to agree and trigger the M-Pesa STK Push payment."
+                            )
+                            MetaService.send_text_message(
+                                db, platform, other_phone, ack_prompt, deal.id, is_urgent=True
+                            )
+                            return f"Acknowledgement recorded! Waiting for the {other_party} to acknowledge the disclaimer."
+
                     if normalized_text == "CONFIRM":
                         if user.id == deal.seller_id:
                             deal.seller_confirmed = True
@@ -904,16 +978,19 @@ class ChatBotService:
                         db.commit()
 
                         if deal.seller_confirmed and deal.buyer_confirmed:
-                            USER_SESSIONS[deal.seller.phone_or_handle] = {"state": "IDLE", "deal_id": deal.id}
-                            USER_SESSIONS[deal.buyer.phone_or_handle] = {"state": "AWAITING_TRANSACTION_TYPE", "deal_id": deal.id}
-                            
-                            return (
-                                "What is the transaction type? Reply with the number:\n"
-                                "1. Digital Deliverable\n"
-                                "2. Shipped Goods (Courier)\n"
-                                "3. Local In-Person Handoff\n"
-                                "4. Remote Physical Service"
-                            )
+                            if not deal.transaction_type:
+                                USER_SESSIONS[deal.seller.phone_or_handle] = {"state": "IDLE", "deal_id": deal.id}
+                                USER_SESSIONS[deal.buyer.phone_or_handle] = {"state": "AWAITING_TRANSACTION_TYPE", "deal_id": deal.id}
+                                
+                                return (
+                                    "What is the transaction type? Reply with the number:\n"
+                                    "1. Digital Deliverable\n"
+                                    "2. Shipped Goods (Courier)\n"
+                                    "3. Local In-Person Handoff\n"
+                                    "4. Remote Physical Service"
+                                )
+                            else:
+                                return cls._trigger_disclaimer_acknowledgements(db, platform, deal, phone_or_handle)
                         else:
                             other_party = "Buyer" if user.id == deal.seller_id else "Seller"
                             return f"You confirmed the deal! Waiting for the {other_party} to confirm."
@@ -929,11 +1006,13 @@ class ChatBotService:
                             MetaService.send_text_message(
                                 db, platform, other_phone,
                                 f"The deal for '{deal.item_description[:30]}...' was rejected/cancelled by the other party.",
-                                deal.id
+                                deal.id,
+                                is_urgent=True
                             )
                         session["state"] = "IDLE"
                         session["deal_id"] = None
                         return "Deal rejected. The transaction is cancelled."
+
 
                 # Seller uploads shipping details
                 elif deal.status == DealStatus.FUNDED and user.id == deal.seller_id:
@@ -1270,10 +1349,10 @@ class ChatBotService:
         USER_SESSIONS[seller_phone] = {"state": "AWAITING_DISCLAIMER_ACK", "deal_id": deal.id}
         USER_SESSIONS[buyer_phone] = {"state": "AWAITING_DISCLAIMER_ACK", "deal_id": deal.id}
         
-        # Send to passive party (do not log this duplicate copy to the shared ChatLog ledger)
+        # Send to passive party with is_urgent=True so rate-limiters do not hold critical transaction disclaimers
         if seller_phone != active_phone:
-            MetaService.send_text_message(db, platform, seller_phone, disclaimer, None)
+            MetaService.send_text_message(db, platform, seller_phone, disclaimer, deal.id, is_urgent=True)
         if buyer_phone and buyer_phone != active_phone:
-            MetaService.send_text_message(db, platform, buyer_phone, disclaimer, None)
+            MetaService.send_text_message(db, platform, buyer_phone, disclaimer, deal.id, is_urgent=True)
             
         return disclaimer

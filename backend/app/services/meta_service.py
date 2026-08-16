@@ -2,7 +2,7 @@ import requests
 from datetime import datetime, UTC, timedelta
 from sqlalchemy.orm import Session
 from backend.app.config import settings
-from backend.app.models import User, UserRole, PlatformType, ChatLog, BotMessageLog
+from backend.app.models import User, UserRole, PlatformType, ChatLog, BotMessageLog, Deal
 import logging
 
 logger = logging.getLogger("meta_service")
@@ -152,6 +152,25 @@ class MetaService:
             return True
         except Exception as e:
             logger.error(f"Failed to send Meta message: {e}")
+            # If plain text message failed (e.g. outside 24h window), try approved deal_status_alert template
+            if platform in ["whatsapp", PlatformType.WHATSAPP] and deal_id and not is_direct_reply:
+                try:
+                    deal = db.query(Deal).filter(Deal.id == deal_id).first()
+                    item_desc = deal.item_description[:30] if deal else "Deal Update"
+                    components = [{
+                        "type": "body",
+                        "parameters": [
+                            {"type": "text", "text": item_desc},
+                            {"type": "text", "text": "Action Required"},
+                            {"type": "text", "text": text[:60]},
+                            {"type": "text", "text": "Please reply to proceed."}
+                        ]
+                    }]
+                    return cls.send_template_message(
+                        db, platform, recipient, "deal_status_alert", components=components, deal_id=deal_id, is_urgent=is_urgent
+                    )
+                except Exception as t_err:
+                    logger.error(f"Template fallback error: {t_err}")
             return False
 
     @classmethod
