@@ -100,7 +100,7 @@ async def mpesa_stk_callback(request: Request, db: Session = Depends(get_db)):
                 }]
                 MetaService.send_template_message(
                     db, PlatformType.WHATSAPP, deal.buyer.phone_or_handle,
-                    "deal_status_alert", components=buyer_components, deal_id=deal.id
+                    "deal_status_alert", components=buyer_components, deal_id=deal.id, is_urgent=True
                 )
 
                 # Notify Seller using template
@@ -115,7 +115,7 @@ async def mpesa_stk_callback(request: Request, db: Session = Depends(get_db)):
                 }]
                 MetaService.send_template_message(
                     db, PlatformType.WHATSAPP, deal.seller.phone_or_handle,
-                    "deal_status_alert", components=seller_components, deal_id=deal.id
+                    "deal_status_alert", components=seller_components, deal_id=deal.id, is_urgent=True
                 )
                 logger.info(f"Payment success processed for Deal {deal.id}. Escrow funded.")
         else:
@@ -133,7 +133,8 @@ async def mpesa_stk_callback(request: Request, db: Session = Depends(get_db)):
                         MetaService.send_text_message(
                             db, PlatformType.WHATSAPP, filer.phone_or_handle,
                             f"❌ M-Pesa Payment for the dispute appeal fee failed or was cancelled: {result_desc}. Your appeal has not been submitted.",
-                            deal.id
+                            deal.id,
+                            is_urgent=True
                         )
                 logger.info(f"Appeal fee payment failed processed for Deal {deal.id}: {result_desc}")
             else:
@@ -151,7 +152,7 @@ async def mpesa_stk_callback(request: Request, db: Session = Depends(get_db)):
                 }]
                 MetaService.send_template_message(
                     db, PlatformType.WHATSAPP, deal.buyer.phone_or_handle,
-                    "deal_status_alert", components=buyer_failed_components, deal_id=deal.id
+                    "deal_status_alert", components=buyer_failed_components, deal_id=deal.id, is_urgent=True
                 )
                 logger.info(f"Payment failed processed for Deal {deal.id}: {result_desc}")
 
