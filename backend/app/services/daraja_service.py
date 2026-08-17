@@ -1,15 +1,69 @@
 import base64
+import re
 import requests
 import uuid
 from datetime import datetime
 from sqlalchemy.orm import Session
 from backend.app.config import settings
-from backend.app.models import Payment, PaymentStatus, Deal, DealStatus, DealType, Dispute
+from backend.app.models import Payment, PaymentStatus, Deal, DealStatus, DealType, Dispute, User
 import logging
 
 logger = logging.getLogger("daraja_service")
 
 class DarajaService:
+    @staticmethod
+    def normalize_phone_number(phone: str) -> str | None:
+        """
+        Normalizes any Kenyan phone number format into canonical 254XXXXXXXXX.
+        Supports: '0712345678', '0112345678', '+254712345678', '254712345678', '712345678', '112345678'.
+        """
+        if not phone:
+            return None
+        cleaned = re.sub(r"[^\d]", "", str(phone).strip())
+        if cleaned.startswith("0") and len(cleaned) == 10:
+            cleaned = "254" + cleaned[1:]
+        elif (cleaned.startswith("7") or cleaned.startswith("1")) and len(cleaned) == 9:
+            cleaned = "254" + cleaned
+        elif cleaned.startswith("254") and len(cleaned) == 12:
+            pass
+        else:
+            if 9 <= len(cleaned) <= 15:
+                return cleaned
+            return None
+
+        # Validate standard Kenyan mobile prefixes (2547XX or 2541XX)
+        if len(cleaned) == 12 and (cleaned.startswith("2547") or cleaned.startswith("2541")):
+            return cleaned
+        return cleaned if (9 <= len(cleaned) <= 15) else None
+
+    @staticmethod
+    def verify_name_match(input_name: str, mpesa_name: str) -> bool:
+        """
+        Quietly checks whether a user-provided profile name matches the official M-Pesa name.
+        Uses fuzzy token overlap matching to account for middle names, initials, order differences, and noise words.
+        """
+        if not input_name or not mpesa_name:
+            return False
+
+        clean_input = re.sub(r"[^A-Za-z\s]", " ", input_name).upper().split()
+        clean_mpesa = re.sub(r"[^A-Za-z\s]", " ", mpesa_name).upper().split()
+
+        noise = {"MR", "MRS", "MS", "DR", "PROF", "PAID", "TO", "FROM", "VIA", "THE", "LIMITED", "LTD"}
+        tokens_input = [w for w in clean_input if len(w) > 1 and w not in noise]
+        tokens_mpesa = [w for w in clean_mpesa if len(w) > 1 and w not in noise]
+
+        if not tokens_input or not tokens_mpesa:
+            return False
+
+        matches = 0
+        for ti in tokens_input:
+            for tm in tokens_mpesa:
+                if ti == tm or (len(ti) >= 4 and len(tm) >= 4 and (ti.startswith(tm) or tm.startswith(ti))):
+                    matches += 1
+                    break
+
+        required_matches = min(2, len(tokens_input))
+        return matches >= max(1, min(required_matches, len(tokens_mpesa)))
     @staticmethod
     def _get_access_token() -> str:
         """Fetch OAuth Access Token from Safaricom Daraja API."""

@@ -1466,5 +1466,36 @@ def test_admin_reset_staff_password(db_session):
     assert exc_info2.value.status_code == 403
 
 
+def test_phone_normalization_and_name_verification(db_session):
+    """Test Kenyan phone number sanitization and quiet fuzzy name verification."""
+    from backend.app.services.daraja_service import DarajaService
+
+    # 1. Phone number normalization
+    assert DarajaService.normalize_phone_number("0712345678") == "254712345678"
+    assert DarajaService.normalize_phone_number("0112345678") == "254112345678"
+    assert DarajaService.normalize_phone_number("+254712345678") == "254712345678"
+    assert DarajaService.normalize_phone_number("254712345678") == "254712345678"
+    assert DarajaService.normalize_phone_number("712345678") == "254712345678"
+    assert DarajaService.normalize_phone_number("112345678") == "254112345678"
+    assert DarajaService.normalize_phone_number("0712-345-678") == "254712345678"
+    assert DarajaService.normalize_phone_number("+254 712 345 678") == "254712345678"
+    assert DarajaService.normalize_phone_number("123") is None
+    assert DarajaService.normalize_phone_number("abc") is None
+
+    # 2. Quiet fuzzy name verification (Matching cases)
+    assert DarajaService.verify_name_match("Allan Kipkorir", "ALLAN KIPKORIR CHERUIYOT") is True
+    assert DarajaService.verify_name_match("Allan Kipkorir Cheruiyot", "254721111111 - ALLAN KIPKORIR") is True
+    assert DarajaService.verify_name_match("Sheila Kirwa", "SHEILA JEPCHUMBA KIRWA") is True
+    assert DarajaService.verify_name_match("John Doe", "DR. JOHN DOE") is True
+    assert DarajaService.verify_name_match("Allan", "ALLAN KIPKORIR") is True
+
+    # 3. Quiet fuzzy name verification (Mismatch cases)
+    assert DarajaService.verify_name_match("Allan Kipkorir", "MARY WANJIKU NDUNGU") is False
+    assert DarajaService.verify_name_match("Sheila Kirwa", "JOHN PETER KAMAU") is False
+    assert DarajaService.verify_name_match("", "ALLAN KIPKORIR") is False
+    assert DarajaService.verify_name_match("Allan", "") is False
+
+
+
 
 

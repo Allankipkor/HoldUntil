@@ -76,6 +76,7 @@ class User(Base):
     location = Column(String(100), nullable=True)
     consent_accepted_at = Column(DateTime, nullable=True)
     payout_mpesa_number = Column(String(20), nullable=True)
+    name_verified = Column(Boolean, default=False)
     trust_score = Column(Float, default=100.0)
     dispute_win_rate = Column(Float, default=0.0)
     ai_overturn_flag_count = Column(Integer, default=0)

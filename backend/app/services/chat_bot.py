@@ -113,15 +113,16 @@ class ChatBotService:
         Creates a new user in the database upon onboarding completion,
         and resumes their original pending request.
         """
-        from backend.app.models import UserRole
+        payout_raw = data.get("payout_mpesa_number")
+        normalized_payout = DarajaService.normalize_phone_number(payout_raw) if payout_raw else None
         user = User(
             platform=platform,
             phone_or_handle=phone_or_handle,
             name=data.get("name"),
-            payout_mpesa_number=data.get("payout_mpesa_number"),
+            payout_mpesa_number=normalized_payout or payout_raw,
             recovery_email_or_phone=data.get("recovery_contact") or data.get("recovery_email_or_phone"),
             location=data.get("location"),
-            consent_accepted_at=datetime.utcnow(),
+            consent_accepted_at=datetime.now(UTC).replace(tzinfo=None),
             role=UserRole.USER
         )
         db.add(user)
@@ -219,10 +220,10 @@ class ChatBotService:
             
             elif state == "ONBOARDING_FALLBACK_PAYOUT":
                 payout_num = text.strip()
-                cleaned_payout = payout_num.replace("+", "")
-                if not cleaned_payout.isdigit() or len(cleaned_payout) < 9 or len(cleaned_payout) > 15:
-                    return "Invalid phone number format. Please enter a valid M-Pesa payout phone number (e.g., 254711111111):"
-                session["onboarding_data"]["payout_mpesa_number"] = payout_num
+                normalized_payout = DarajaService.normalize_phone_number(payout_num)
+                if not normalized_payout:
+                    return "Invalid phone number format. Please enter a valid M-Pesa payout phone number (e.g., 0712345678 or 254711111111):"
+                session["onboarding_data"]["payout_mpesa_number"] = normalized_payout
                 session["state"] = "ONBOARDING_FALLBACK_RECOVERY"
                 return "Thank you. What is your backup email or phone number?\n\n" \
                        "Helper: This protects you if you ever lose access to WhatsApp, Instagram, or Messenger — you'll still be able to manage your deals."

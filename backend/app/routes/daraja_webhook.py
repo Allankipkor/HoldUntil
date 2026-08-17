@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from backend.app.database import get_db
 from backend.app.models import Payment, PaymentStatus, Deal, DealStatus, PlatformType, Dispute, DisputeTier, User
 from backend.app.services.meta_service import MetaService
+from backend.app.services.daraja_service import DarajaService
 from backend.app.config import settings
 import logging
 
@@ -47,6 +48,21 @@ async def mpesa_stk_callback(request: Request, db: Session = Depends(get_db)):
             payment.status = PaymentStatus.PAID
             payment.c2b_confirmation_ref = receipt_no or f"M_REC_{uuid.uuid4().hex[:8].upper()}"
             db.commit()
+
+            # Quiet KYC verification check on Buyer
+            if deal.buyer and deal.buyer.name:
+                buyer_mpesa_name = None
+                for item in metadata_list:
+                    if item.get("Name") in ["CustomerName", "PayerName", "SenderName"]:
+                        buyer_mpesa_name = item.get("Value")
+                        break
+                if buyer_mpesa_name:
+                    if DarajaService.verify_name_match(deal.buyer.name, str(buyer_mpesa_name)):
+                        deal.buyer.name_verified = True
+                        db.commit()
+                        logger.info(f"Buyer '{deal.buyer.name}' quietly KYC verified against M-Pesa payer name '{buyer_mpesa_name}'")
+                    else:
+                        logger.warning(f"Quiet KYC Mismatch: Buyer profile '{deal.buyer.name}' vs M-Pesa payer '{buyer_mpesa_name}'")
 
             if is_appeal_payment:
                 # Load the latest resolved dispute
@@ -213,6 +229,24 @@ async def mpesa_b2c_callback(request: Request, db: Session = Depends(get_db)):
             payment.status = PaymentStatus.REFUND_COMPLETED if is_refund else PaymentStatus.PAYOUT_COMPLETED
             deal.status = DealStatus.REFUNDED if is_refund else DealStatus.COMPLETED
             db.commit()
+
+            # Quiet KYC verification check on Payout/Refund receiver
+            result_params = result.get("ResultParameters", {}).get("ResultParameter", [])
+            receiver_name = None
+            for param in result_params:
+                if param.get("Key") in ["ReceiverPartyPublicName", "RecipientName"]:
+                    raw_val = param.get("Value", "")
+                    receiver_name = raw_val.split("-")[-1].strip() if "-" in str(raw_val) else str(raw_val).strip()
+                    break
+
+            target_user = deal.buyer if is_refund else deal.seller
+            if target_user and target_user.name and receiver_name:
+                if DarajaService.verify_name_match(target_user.name, receiver_name):
+                    target_user.name_verified = True
+                    db.commit()
+                    logger.info(f"User '{target_user.name}' quietly KYC verified against M-Pesa B2C receiver '{receiver_name}'")
+                else:
+                    logger.warning(f"Quiet KYC Mismatch: User profile '{target_user.name}' vs M-Pesa B2C receiver '{receiver_name}'")
             
             from backend.app.services.rating_service import RatingService
             RatingService.trigger_post_deal_rating(db, deal)
