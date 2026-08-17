@@ -61,7 +61,8 @@ export default function App() {
   const [flowConsent, setFlowConsent] = useState(false);
   const [sellerMsg, setSellerMsg] = useState('');
   const [buyerMsg, setBuyerMsg] = useState('');
-  const [chatLogs, setChatLogs] = useState([]);
+  const [sellerChatLogs, setSellerChatLogs] = useState([]);
+  const [buyerChatLogs, setBuyerChatLogs] = useState([]);
   const [activeDealId, setActiveDealId] = useState(null);
   const [dealDetails, setDealDetails] = useState(null);
   const [sandboxLoading, setSandboxLoading] = useState(false);
@@ -656,7 +657,8 @@ export default function App() {
       });
       if (res.ok) {
         alert("Database and chat sessions cleared successfully!");
-        setChatLogs([]);
+        setSellerChatLogs([]);
+        setBuyerChatLogs([]);
         setActiveDealId(null);
         setDealDetails(null);
         setDisputes([]);
@@ -678,13 +680,19 @@ export default function App() {
     if (!msgText.trim()) return;
     setSandboxLoading(true);
     
+    const isSeller = roleLabel === 'Seller' || senderPhone === sellerPhone;
+
     // Add message locally first for responsive UI
     const newUserLog = {
       sender_handle: roleLabel,
       message_content: msgText,
       timestamp: new Date().toISOString()
     };
-    setChatLogs(prev => [...prev, newUserLog]);
+    if (isSeller) {
+      setSellerChatLogs(prev => [...prev, newUserLog]);
+    } else {
+      setBuyerChatLogs(prev => [...prev, newUserLog]);
+    }
 
     try {
       const formData = new FormData();
@@ -706,10 +714,14 @@ export default function App() {
           message_content: data.reply,
           timestamp: new Date().toISOString()
         };
-        setChatLogs(prev => [...prev, botLog]);
+        if (isSeller) {
+          setSellerChatLogs(prev => [...prev, botLog]);
+        } else {
+          setBuyerChatLogs(prev => [...prev, botLog]);
+        }
 
         if (data.session_state) {
-          if (senderPhone === sellerPhone) {
+          if (isSeller) {
             setSellerSessionState(data.session_state);
           } else {
             setBuyerSessionState(data.session_state);
@@ -726,7 +738,7 @@ export default function App() {
             setDealDetails(null);
             setShowBuyerConfirmDeclaration(false);
             if (cleanMsg === "SELL") {
-              setChatLogs([
+              setSellerChatLogs([
                 newUserLog,
                 {
                   sender_handle: "Bot",
@@ -736,7 +748,8 @@ export default function App() {
               ]);
             } else {
               setTimeout(() => {
-                setChatLogs([]);
+                setSellerChatLogs([]);
+                setBuyerChatLogs([]);
               }, 1500);
             }
           }
@@ -756,10 +769,11 @@ export default function App() {
   const simulateOfflineResponse = (msg, role) => {
     let reply = "Escrow bot simulator. Type SELL to create, or enter your join code.";
     const cleanMsg = msg.trim().toUpperCase();
+    const isSeller = role === 'Seller';
 
     if (cleanMsg === "SELL") {
       reply = "Let's set up your secure escrow deal. What is the item description? (e.g. 'HP Pavilion Laptop, 8GB RAM, Used')";
-    } else if (cleanMsg.includes("HP PAVILION") || cleanMsg.includes("IPHONE") || cleanMsg.length > 10 && cleanMsg.match(/[a-zA-Z]/)) {
+    } else if (cleanMsg.includes("HP PAVILION") || cleanMsg.includes("IPHONE") || (cleanMsg.length > 10 && cleanMsg.match(/[a-zA-Z]/))) {
       reply = "Got it. What is the agreed price in Kenyan Shillings (KES)? (Numbers only, e.g. 15000)";
     } else if (cleanMsg.match(/^\d+$/)) {
       reply = "How many days should the delivery take? (Enter a number of days, e.g. 3)";
@@ -837,11 +851,16 @@ export default function App() {
     }
 
     setTimeout(() => {
-      setChatLogs(prev => [...prev, {
+      const botLog = {
         sender_handle: "Bot",
         message_content: reply,
         timestamp: new Date().toISOString()
-      }]);
+      };
+      if (isSeller) {
+        setSellerChatLogs(prev => [...prev, botLog]);
+      } else {
+        setBuyerChatLogs(prev => [...prev, botLog]);
+      }
     }, 800);
   };
 
@@ -851,17 +870,6 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setDealDetails(data);
-        
-        // Sync chat logs from backend
-        const mappedLogs = data.chat_logs.map(log => ({
-          sender_handle: log.sender_handle,
-          message_content: log.message_content,
-          media_url: log.media_url,
-          is_revoked: log.is_revoked,
-          id: log.id,
-          timestamp: log.timestamp
-        }));
-        setChatLogs(mappedLogs);
       }
     } catch (e) {
       // offline
@@ -893,9 +901,9 @@ export default function App() {
         },
         payments: [{ amount: prev.deal.agreed_price, status: "paid", c2b_confirmation_ref: "MPESA_XYZ789" }]
       }));
-      setChatLogs(prev => [...prev, 
-        { sender_handle: "Bot", message_content: "💰 M-Pesa Payment of KES 15000.00 received! Escrow locked. Verification code: HU-8F9K", timestamp: new Date().toISOString() }
-      ]);
+      const paymentMsg = { sender_handle: "Bot", message_content: "💰 M-Pesa Payment of KES 15000.00 received! Escrow locked. Verification code: HU-8F9K", timestamp: new Date().toISOString() };
+      setSellerChatLogs(prev => [...prev, paymentMsg]);
+      setBuyerChatLogs(prev => [...prev, paymentMsg]);
     }
   };
 
@@ -948,9 +956,9 @@ export default function App() {
           deliverable_file_url: options.deliverable_file_url || null
         }]
       }));
-      setChatLogs(prev => [...prev, 
-        { sender_handle: "Bot", message_content: `📦 Proof submitted! File: ${photoType || options.deliverable_file_url}. Prompting buyer.`, timestamp: new Date().toISOString() }
-      ]);
+      const uploadMsg = { sender_handle: "Bot", message_content: `📦 Proof submitted! File: ${photoType || options.deliverable_file_url}. Prompting buyer.`, timestamp: new Date().toISOString() };
+      setSellerChatLogs(prev => [...prev, uploadMsg]);
+      setBuyerChatLogs(prev => [...prev, uploadMsg]);
     }
   };
 
@@ -996,9 +1004,9 @@ export default function App() {
           }
         }]
       }));
-      setChatLogs(prev => [...prev, 
-        { sender_handle: "Bot", message_content: `📹 Live Video Call session logged as completion proof.`, timestamp: new Date().toISOString() }
-      ]);
+      const videoLogMsg = { sender_handle: "Bot", message_content: `📹 Live Video Call session logged as completion proof.`, timestamp: new Date().toISOString() };
+      setSellerChatLogs(prev => [...prev, videoLogMsg]);
+      setBuyerChatLogs(prev => [...prev, videoLogMsg]);
     }
   };
 
@@ -1014,15 +1022,22 @@ export default function App() {
         fetchDealDetails(activeDealId);
       }
     } catch (e) {
-      setChatLogs(prev => prev.map(log => log.id === logId ? { ...log, is_revoked: true } : log));
+      setSellerChatLogs(prev => prev.map(log => log.id === logId ? { ...log, is_revoked: true } : log));
+      setBuyerChatLogs(prev => prev.map(log => log.id === logId ? { ...log, is_revoked: true } : log));
     }
   };
 
   // Scroll Chat to bottom
-  const chatBottomRef = useRef(null);
+  const sellerChatBottomRef = useRef(null);
+  const buyerChatBottomRef = useRef(null);
+
   useEffect(() => {
-    chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatLogs]);
+    sellerChatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [sellerChatLogs]);
+
+  useEffect(() => {
+    buyerChatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [buyerChatLogs]);
 
   const renderTrendChart = () => {
     if (!metrics.trend || metrics.trend.length === 0) {
@@ -1470,7 +1485,7 @@ export default function App() {
               
               {/* Chat View */}
               <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', background: '#0b141a', borderRadius: '8px', padding: '12px', minHeight: '260px' }}>
-                {chatLogs.map((log, idx) => {
+                {sellerChatLogs.map((log, idx) => {
                   const isBot = log.sender_handle === 'Bot';
                   const isSeller = log.sender_handle === 'Seller';
                   return (
@@ -1526,7 +1541,7 @@ export default function App() {
                     </div>
                   </div>
                 )}
-                <div ref={chatBottomRef} />
+                <div ref={sellerChatBottomRef} />
               </div>
 
               {/* Chat Input */}
@@ -2081,7 +2096,7 @@ export default function App() {
 
               {/* Chat View */}
               <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', background: '#0b141a', borderRadius: '8px', padding: '12px', minHeight: '260px' }}>
-                {chatLogs.map((log, idx) => {
+                {buyerChatLogs.map((log, idx) => {
                   const isBot = log.sender_handle === 'Bot';
                   const isBuyer = log.sender_handle === 'Buyer';
                   return (
@@ -2137,6 +2152,7 @@ export default function App() {
                     </div>
                   </div>
                 )}
+                <div ref={buyerChatBottomRef} />
               </div>
 
               {/* Chat Input */}
